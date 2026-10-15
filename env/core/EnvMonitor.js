@@ -200,7 +200,7 @@
                 id: generateLogId(),
                 timestamp: Date.now(),
                 tagName: tagName,
-                elementId: element?.__id__,
+                elementId: window.__nodeIdOf__?.(element),
                 options: options,
                 chain: CallChain.getChain(),
                 attributes: {},
@@ -527,8 +527,8 @@
             if (value instanceof Error) return `[Error: ${value.message}]`;
             
             if (typeof value === 'object') {
-                if (value.__id__) {
-                    return `[Element:${value.tagName || value.nodeName}#${value.__id__}]`;
+                if (window.__nodeIdOf__?.(value)) {
+                    return `[Element:${value.tagName || value.nodeName}#${window.__nodeIdOf__?.(value)}]`;
                 }
                 if (Array.isArray(value)) {
                     return `[Array(${value.length})]`;

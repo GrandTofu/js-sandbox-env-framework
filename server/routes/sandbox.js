@@ -72,6 +72,8 @@ router.post('/run', async (req, res) => {
         
         // 执行代码
         const result = await sandbox.execute(code, { timeout });
+        // 按请求创建的 HTML 沙箱用完即弃，取消它剩余的定时器
+        if (html !== undefined) sandbox.dispose();
         
         res.json({
             success: result.success,

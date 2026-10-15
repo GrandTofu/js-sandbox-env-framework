@@ -1,128 +1,119 @@
 /**
- * @env-module Timer
- * @description 定时器函数模拟
- * @compatibility Chrome 80+, Firefox 75+, Edge 79+
- * @note 在沙箱环境中，定时器是模拟实现，不会真正延迟执行
+ * @env-module timers
+ * @description HTML 定时器与微任务：setTimeout/setInterval/clearTimeout/clearInterval/queueMicrotask，
+ *              经宿主事件循环真实调度；嵌套超过 5 层且间隔小于 4ms 时按 HTML 规范钳制为 4ms
+ * @compatibility Chrome 120+
  */
+(function () {
+    'use strict';
 
-(function() {
-    let timerId = 0;
-    const timers = new Map();
-    const intervals = new Map();
+    const markNative = window.safefunction;
+    const host = window.__host__;
+    // 加载时捕获内建函数，页面脚本改写 Promise.prototype.then / Reflect 不影响调度
+    const apply = Reflect.apply;
+    const promiseThen = Promise.prototype.then;
+    const resolvedPromise = Promise.resolve();
+    const indirectEval = eval;
 
-    // setTimeout
-    const originalSetTimeout = window.setTimeout;
-    window.setTimeout = function(callback, delay, ...args) {
-        if (typeof callback !== 'function') {
-            // 处理字符串代码（不推荐但需要兼容）
-            const code = String(callback);
-            callback = function() {
-                eval(code);
-            };
+    const active = new Map();   // 定时器 id → 定时器记录
+    let lastId = 0;
+    // 正在执行的定时器任务的嵌套层级；不在定时器任务中时为 0
+    let currentNesting = 0;
+
+    function requireArguments(name, count) {
+        if (count < 1) {
+            throw new TypeError(`Failed to execute '${name}' on 'Window': 1 argument required, but only 0 present.`);
         }
-        
-        const id = ++timerId;
-        
-        // 在沙箱环境中，我们记录定时器但可能需要不同的执行策略
-        timers.set(id, {
-            callback,
-            delay: delay || 0,
+    }
+
+    // WebIDL long 转换（ToInt32），负数按 0 处理
+    function toTimeout(value) {
+        const timeout = Number(value) | 0;
+        return timeout < 0 ? 0 : timeout;
+    }
+
+    // HTML 规范 "timer initialization steps" 中的嵌套层级与 4ms 钳制
+    function schedule(timer) {
+        timer.nesting = currentNesting + 1;
+        const delay = timer.nesting > 5 && timer.timeout < 4 ? 4 : timer.timeout;
+        // setTimeout 让宿主保持等待；setInterval 不阻止宿主在空闲时结束
+        host.timers.schedule(timer.id, delay, !timer.repeat, () => run(timer));
+    }
+
+    function invoke(timer) {
+        if (typeof timer.handler === 'function') {
+            apply(timer.handler, window, timer.args);
+        } else {
+            indirectEval(timer.handler);
+        }
+    }
+
+    function run(timer) {
+        if (active.get(timer.id) !== timer) return;
+        if (!timer.repeat) active.delete(timer.id);
+        currentNesting = timer.nesting;
+        try {
+            invoke(timer);
+        } catch (error) {
+            host.reportException(error);
+        }
+        if (timer.repeat && active.get(timer.id) === timer) schedule(timer);
+        currentNesting = 0;
+    }
+
+    function start(handler, timeout, args, repeat) {
+        const timer = {
+            id: ++lastId,
+            // 非函数的 handler 按 DOMString 处理，触发时在全局作用域求值
+            handler: typeof handler === 'function' ? handler : String(handler),
+            timeout: toTimeout(timeout),
             args,
-            createdAt: Date.now()
-        });
-        
-        // 如果有原始实现，使用它
-        if (typeof originalSetTimeout === 'function') {
-            const realId = originalSetTimeout.call(window, function() {
-                timers.delete(id);
-                callback.apply(window, args);
-            }, delay);
-            
-            // 建立映射关系
-            timers.get(id).realId = realId;
-        }
-        
-        return id;
-    };
-
-    // clearTimeout
-    const originalClearTimeout = window.clearTimeout;
-    window.clearTimeout = function(id) {
-        const timer = timers.get(id);
-        if (timer) {
-            if (timer.realId !== undefined && typeof originalClearTimeout === 'function') {
-                originalClearTimeout.call(window, timer.realId);
-            }
-            timers.delete(id);
-        }
-    };
-
-    // setInterval
-    const originalSetInterval = window.setInterval;
-    window.setInterval = function(callback, delay, ...args) {
-        if (typeof callback !== 'function') {
-            const code = String(callback);
-            callback = function() {
-                eval(code);
-            };
-        }
-        
-        const id = ++timerId;
-        
-        intervals.set(id, {
-            callback,
-            delay: delay || 0,
-            args,
-            createdAt: Date.now()
-        });
-        
-        if (typeof originalSetInterval === 'function') {
-            const realId = originalSetInterval.call(window, function() {
-                callback.apply(window, args);
-            }, delay);
-            
-            intervals.get(id).realId = realId;
-        }
-        
-        return id;
-    };
-
-    // clearInterval
-    const originalClearInterval = window.clearInterval;
-    window.clearInterval = function(id) {
-        const interval = intervals.get(id);
-        if (interval) {
-            if (interval.realId !== undefined && typeof originalClearInterval === 'function') {
-                originalClearInterval.call(window, interval.realId);
-            }
-            intervals.delete(id);
-        }
-    };
-
-    // queueMicrotask
-    window.queueMicrotask = window.queueMicrotask || function(callback) {
-        Promise.resolve().then(callback);
-    };
-
-    // 用于调试：获取所有活动定时器
-    window.__getActiveTimers__ = function() {
-        return {
-            timeouts: Array.from(timers.entries()).map(([id, t]) => ({
-                id,
-                delay: t.delay,
-                age: Date.now() - t.createdAt
-            })),
-            intervals: Array.from(intervals.entries()).map(([id, i]) => ({
-                id,
-                delay: i.delay,
-                age: Date.now() - i.createdAt
-            }))
+            repeat,
+            nesting: 0
         };
+        active.set(timer.id, timer);
+        schedule(timer);
+        return timer.id;
+    }
+
+    function stop(id) {
+        const key = Number(id) | 0;
+        if (!active.has(key)) return;
+        active.delete(key);
+        host.timers.cancel(key);
+    }
+
+    const holder = {
+        setTimeout(handler, timeout = 0, ...args) {
+            requireArguments('setTimeout', arguments.length);
+            return start(handler, timeout, args, false);
+        },
+        clearTimeout(id = 0) {
+            stop(id);
+        },
+        setInterval(handler, timeout = 0, ...args) {
+            requireArguments('setInterval', arguments.length);
+            return start(handler, timeout, args, true);
+        },
+        clearInterval(id = 0) {
+            stop(id);
+        },
+        queueMicrotask(callback) {
+            requireArguments('queueMicrotask', arguments.length);
+            if (typeof callback !== 'function') {
+                throw new TypeError("Failed to execute 'queueMicrotask' on 'Window': The callback provided as parameter 1 is not a function.");
+            }
+            apply(promiseThen, resolvedPromise, [() => {
+                try {
+                    callback();
+                } catch (error) {
+                    host.reportException(error);
+                }
+            }]);
+        }
     };
 
-    // 清除所有定时器
-    window.__clearAllTimers__ = function() {
-        timers.forEach((timer, id) => window.clearTimeout(id));
-        intervals.forEach((interval, id) => window.clearInterval(id));
-    };
+    for (const name of Object.keys(holder)) {
+        window[name] = markNative(holder[name]);
+    }
 })();

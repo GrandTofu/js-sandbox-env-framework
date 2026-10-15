@@ -4,7 +4,7 @@
 
 ## 安装与运行
 
-需要 Node.js 18+；采集浏览器指纹时另需 Python 3 和 Chrome/Chromium/Edge。
+需要 Node.js 22.8+（沙箱用 `vm.constants.DONT_CONTEXTIFY` 创建普通全局对象，避免宿主 realm 泄漏）；采集浏览器指纹时另需 Python 3 和 Chrome/Chromium/Edge。
 
 ```bash
 npm ci

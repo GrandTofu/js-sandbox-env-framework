@@ -1,102 +1,81 @@
 /**
  * @env-module atob/btoa
- * @description Base64编解码函数模拟
- * @compatibility Chrome 80+, Firefox 75+, Edge 79+
+ * @description Base64 编解码：按 HTML 规范的 forgiving-base64 解码，错误抛 InvalidCharacterError DOMException
+ * @compatibility Chrome 120+
  */
+(function () {
+    'use strict';
 
-(function() {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+    const markNative = window.safefunction;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const lookup = new Map(Array.from(alphabet, (char, index) => [char, index]));
 
-    // btoa - 字符串转Base64
-    function btoa(str) {
-        if (typeof str !== 'string') {
-            str = String(str);
+    function invalidCharacter(message) {
+        return new DOMException(message, 'InvalidCharacterError');
+    }
+
+    function requireArgument(name, count) {
+        if (count < 1) {
+            throw new TypeError(`Failed to execute '${name}' on 'Window': 1 argument required, but only 0 present.`);
         }
-        
-        // 检查是否包含非Latin1字符
-        for (let i = 0; i < str.length; i++) {
-            if (str.charCodeAt(i) > 255) {
-                throw new DOMException(
-                    "Failed to execute 'btoa' on 'Window': The string to be encoded contains characters outside of the Latin1 range.",
-                    'InvalidCharacterError'
-                );
-            }
-        }
-        
+    }
+
+    function encode(data) {
         let output = '';
-        let i = 0;
-        
-        while (i < str.length) {
-            const chr1 = str.charCodeAt(i++);
-            const chr2 = str.charCodeAt(i++);
-            const chr3 = str.charCodeAt(i++);
-            
-            const enc1 = chr1 >> 2;
-            const enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
-            let enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
-            let enc4 = chr3 & 63;
-            
-            if (isNaN(chr2)) {
-                enc3 = enc4 = 64;
-            } else if (isNaN(chr3)) {
-                enc4 = 64;
-            }
-            
-            output += chars.charAt(enc1) + chars.charAt(enc2) + chars.charAt(enc3) + chars.charAt(enc4);
+        for (let i = 0; i < data.length; i += 3) {
+            const a = data.charCodeAt(i);
+            const b = i + 1 < data.length ? data.charCodeAt(i + 1) : NaN;
+            const c = i + 2 < data.length ? data.charCodeAt(i + 2) : NaN;
+            output += alphabet[a >> 2];
+            output += alphabet[((a & 3) << 4) | ((b || 0) >> 4)];
+            output += Number.isNaN(b) ? '=' : alphabet[((b & 15) << 2) | ((c || 0) >> 6)];
+            output += Number.isNaN(c) ? '=' : alphabet[c & 63];
         }
-        
         return output;
     }
 
-    // atob - Base64转字符串
-    function atob(str) {
-        if (typeof str !== 'string') {
-            str = String(str);
-        }
-        
-        // 去除空白字符
-        str = str.replace(/\s/g, '');
-        
-        // 检查是否是有效的Base64字符串
-        if (!/^[A-Za-z0-9+\/]*={0,2}$/.test(str)) {
-            throw new DOMException(
-                "Failed to execute 'atob' on 'Window': The string to be decoded is not correctly encoded.",
-                'InvalidCharacterError'
-            );
-        }
-        
-        // 补齐padding
-        while (str.length % 4) {
-            str += '=';
-        }
-        
+    // HTML 规范 forgiving-base64 decode
+    function decode(data) {
+        let input = data.replace(/[\t\n\f\r ]/g, '');
+        if (input.length % 4 === 0) input = input.replace(/={1,2}$/, '');
+        if (input.length % 4 === 1 || /[^A-Za-z0-9+/]/.test(input)) return null;
+
         let output = '';
-        let i = 0;
-        
-        while (i < str.length) {
-            const enc1 = chars.indexOf(str.charAt(i++));
-            const enc2 = chars.indexOf(str.charAt(i++));
-            const enc3 = chars.indexOf(str.charAt(i++));
-            const enc4 = chars.indexOf(str.charAt(i++));
-            
-            const chr1 = (enc1 << 2) | (enc2 >> 4);
-            const chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
-            const chr3 = ((enc3 & 3) << 6) | enc4;
-            
-            output += String.fromCharCode(chr1);
-            
-            if (enc3 !== 64) {
-                output += String.fromCharCode(chr2);
-            }
-            if (enc4 !== 64) {
-                output += String.fromCharCode(chr3);
+        let buffer = 0;
+        let bits = 0;
+        for (const char of input) {
+            buffer = (buffer << 6) | lookup.get(char);
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                output += String.fromCharCode((buffer >> bits) & 0xFF);
             }
         }
-        
         return output;
     }
 
-    // 挂载到window
-    window.btoa = btoa;
-    window.atob = atob;
+    const holder = {
+        atob(...args) {
+            requireArgument('atob', args.length);
+            const decoded = decode(String(args[0]));
+            if (decoded === null) {
+                throw invalidCharacter("Failed to execute 'atob' on 'Window': The string to be decoded is not correctly encoded.");
+            }
+            return decoded;
+        },
+        btoa(...args) {
+            requireArgument('btoa', args.length);
+            const data = String(args[0]);
+            if (/[^\u0000-\u00FF]/.test(data)) {
+                throw invalidCharacter("Failed to execute 'btoa' on 'Window': The string to be encoded contains characters outside of the Latin1 range.");
+            }
+            return encode(data);
+        }
+    };
+
+    for (const name of ['atob', 'btoa']) {
+        const operation = holder[name];
+        Object.defineProperty(operation, 'length', { value: 1 });
+        window[name] = markNative(operation);
+    }
 })();

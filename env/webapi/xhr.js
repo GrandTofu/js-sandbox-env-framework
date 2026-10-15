@@ -167,5 +167,4 @@
 
     // 挂载到window
     window.XMLHttpRequest = XMLHttpRequest;
-    global.XMLHttpRequest = XMLHttpRequest;
 })();

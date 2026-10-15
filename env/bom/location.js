@@ -9,12 +9,6 @@
     let current = new URLConstructor(profile.href || 'https://example.com/');
     function navigate(value) {
         current = new URLConstructor(String(value), current.href);
-        // Navigation is in-memory only. Keep the mock Document URL coherent.
-        if (window.document) {
-            try { window.document.URL = current.href; } catch (_) {}
-            try { window.document.documentURI = current.href; } catch (_) {}
-            try { window.document.baseURI = current.href; } catch (_) {}
-        }
     }
 
     function Location() { throw new TypeError('Illegal constructor'); }
