@@ -121,8 +121,11 @@
             if (/localStorage|sessionStorage/.test(joined)) {
                 suggestions.push({ module: 'env/bom/storage.js', reason: 'Script uses Web Storage' });
             }
-            if (/fetch|XMLHttpRequest|Request|Response/.test(joined)) {
-                suggestions.push({ module: 'env/webapi/network.js', reason: 'Script makes network requests' });
+            if (/fetch|Request|Response/.test(joined)) {
+                suggestions.push({ module: 'env/webapi/apis.js', reason: 'Script uses Fetch APIs' });
+            }
+            if (/XMLHttpRequest/.test(joined)) {
+                suggestions.push({ module: 'env/webapi/xhr.js', reason: 'Script uses XMLHttpRequest' });
             }
             if (/crypto|getRandomValues|subtle/.test(joined)) {
                 suggestions.push({ module: 'env/bom/crypto.js', reason: 'Script uses Crypto API' });

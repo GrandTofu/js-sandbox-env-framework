@@ -59,8 +59,8 @@
     const apis = apiBuilder.build(profile);
     for (const key of ['connection', 'geolocation', 'permissions', 'mediaDevices', 'serviceWorker',
         'clipboard', 'credentials', 'storage', 'locks', 'wakeLock', 'mediaSession', 'gpu',
-        'userActivation', 'mediaCapabilities', 'keyboard', 'mouse', 'bluetooth', 'usb', 'serial',
-        'hid', 'xr', 'presentation', 'gamepad', 'midi']) {
+        'userActivation', 'mediaCapabilities', 'keyboard', 'bluetooth', 'usb', 'serial',
+        'hid', 'xr', 'presentation']) {
         state[key] = apis[key];
     }
 
@@ -124,8 +124,8 @@
         'userAgent', 'language', 'languages', 'onLine', 'webdriver', 'clipboard', 'credentials',
         'mediaDevices', 'storage', 'serviceWorker', 'locks', 'wakeLock', 'mediaSession',
         'deviceMemory', 'permissions', 'userAgentData', 'gpu', 'userActivation',
-        'mediaCapabilities', 'keyboard', 'mouse', 'bluetooth', 'usb', 'serial', 'hid', 'xr',
-        'presentation', 'gamepad', 'midi'
+        'mediaCapabilities', 'keyboard', 'bluetooth', 'usb', 'serial', 'hid', 'xr',
+        'presentation'
     ];
     if (hasBuildID) attributeKeys.push('buildID');
     for (const key of attributeKeys) {
@@ -145,6 +145,17 @@
             vibrate(pattern) { return true; },
             // Chrome 每次调用返回同一个 Promise
             getBattery() { return apis.battery; },
+            // 未连接设备的桌面环境；设备访问仍通过 Navigator 方法发起。
+            getGamepads() { return [null, null, null, null]; },
+            requestMIDIAccess(options = {}) {
+                return Promise.reject(new DOMException('Permission denied', 'NotAllowedError'));
+            },
+            requestMediaKeySystemAccess(keySystem, supportedConfigurations) {
+                return Promise.reject(new DOMException('Unsupported key system', 'NotSupportedError'));
+            },
+            setAppBadge(contents = undefined) { return Promise.resolve(); },
+            clearAppBadge() { return Promise.resolve(); },
+            getInstalledRelatedApps() { return Promise.resolve([]); },
             registerProtocolHandler(scheme, url) {},
             unregisterProtocolHandler(scheme, url) {}
         }

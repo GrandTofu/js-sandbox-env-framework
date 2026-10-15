@@ -6,24 +6,20 @@
 
 (function() {
     // Blob
-    function Blob(blobParts, options) {
-        this._parts = blobParts || [];
-        this._type = options?.type || '';
-        
-        // 计算大小
-        let size = 0;
-        this._parts.forEach(part => {
-            if (typeof part === 'string') {
-                size += part.length;
-            } else if (part instanceof ArrayBuffer) {
-                size += part.byteLength;
-            } else if (part instanceof Blob) {
-                size += part.size;
-            } else if (ArrayBuffer.isView(part)) {
-                size += part.byteLength;
-            }
+    function Blob(blobParts = [], options = {}) {
+        // 构造时复制字节；后续修改源 TypedArray 不影响 Blob 内容。
+        const chunks = Array.from(blobParts, part => {
+            if (part instanceof Blob) return part._bytes;
+            if (part instanceof ArrayBuffer) return new Uint8Array(part);
+            if (ArrayBuffer.isView(part)) return new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+            return new TextEncoder().encode(String(part));
         });
-        this._size = size;
+        this._size = chunks.reduce((size, bytes) => size + bytes.length, 0);
+        this._bytes = new Uint8Array(this._size);
+        let offset = 0;
+        for (const bytes of chunks) { this._bytes.set(bytes, offset); offset += bytes.length; }
+        const type = String(options?.type || '');
+        this._type = /[^\x20-\x7e]/.test(type) ? '' : type.toLowerCase();
     }
 
     Object.defineProperties(Blob.prototype, {
@@ -35,39 +31,21 @@
         }
     });
 
-    Blob.prototype.slice = function(start, end, contentType) {
-        start = start || 0;
-        end = end || this._size;
-        return new Blob(this._parts.slice(start, end), { type: contentType || this._type });
+    Blob.prototype.slice = function(start = 0, end = this.size, contentType = '') {
+        return new window.Blob([this._bytes.slice(start, end)], { type: contentType });
     };
 
     Blob.prototype.text = function() {
-        return Promise.resolve(this._parts.map(part => {
-            if (typeof part === 'string') return part;
-            return '';
-        }).join(''));
+        return Promise.resolve(new TextDecoder().decode(this._bytes));
     };
 
     Blob.prototype.arrayBuffer = function() {
-        return Promise.resolve(new ArrayBuffer(this._size));
+        return Promise.resolve(this._bytes.slice().buffer);
     };
 
     Blob.prototype.stream = function() {
-        return {
-            getReader: function() {
-                let done = false;
-                return {
-                    read: function() {
-                        if (done) {
-                            return Promise.resolve({ done: true, value: undefined });
-                        }
-                        done = true;
-                        return Promise.resolve({ done: false, value: new Uint8Array(0) });
-                    },
-                    cancel: function() { return Promise.resolve(); }
-                };
-            }
-        };
+        const bytes = this._bytes.slice();
+        return new ReadableStream({ start(controller) { controller.enqueue(bytes); controller.close(); } });
     };
 
     // File

@@ -83,7 +83,7 @@
         parent: 'CSSRule',
         attributes: {
             media() { return internal(this).media; },
-            conditionText() { return internal(this).conditionText; },
+            conditionText() { return internal(this).media.mediaText; },
             cssRules() { return internal(this).ruleList; }
         },
         methods: {

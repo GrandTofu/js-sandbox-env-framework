@@ -60,6 +60,21 @@ console.log(result);
 
 目前主要模拟常见的 DOM、BOM、Storage、导航和部分指纹 API；`fetch`/XHR、布局与字体测量、Canvas/GPU、事件循环、浏览器内部对象、网络请求头及 TLS 指纹仍无法完整复现。Node `vm` **不能用于隔离不可信脚本**。能否跑通某个站点取决于其 JS 实际调用的 API、页面状态和网络依赖。请先固定目标浏览器版本，按脚本调用链与真实浏览器对照并补齐差异。
 
+加载浏览器环境后，`fetch` 由 `env/webapi/apis.js` 提供，XHR 由 `env/webapi/xhr.js` 提供，均不发送真实网络请求。默认返回空的 200 模拟响应；XHR 支持状态转换、进度/上传事件、取消、超时及文本、JSON、ArrayBuffer、Blob、Document 响应。可用现有监控系统配置响应，例如：
+
+```js
+__setMock__('XMLHttpRequest.send', {
+    handler(body, url, method) {
+        return { status: 200, headers: { 'content-type': 'application/json' },
+            body: { ok: true }, delay: 5 };
+    }
+});
+```
+
+mock 返回 `error` 或 `status: 0` 会触发错误事件，`delay` 可用于验证 `timeout` 与 `abort()`。同步 XHR 只同步完成模拟响应，不等待真实网络或 mock 延迟。Request/Response 根据字符串、URLSearchParams、Blob、FormData 推导 Content-Type，并保留显式设置的值。`new Response()` 的 `statusText` 默认空串，与浏览器一致。
+
+旧 `env/webapi/fetch.js`、`env/webapi/network.js`、`env/bom/console.js`、`env/bom/observers.js` 已移除；默认加载入口是 `server/sandbox/envModules.js`。console 由 `GlobalScope.js` 提供，观察者由 `observerApis.js` 和 `performance.js` 提供；旧 network 模块的 `__NetworkMock__` / `__NetworkStore__` 应迁移到现有 `__setMock__` 与监控调用日志。
+
 ```bash
 npm test
 python -m unittest discover -s test -p 'test_collector.py'

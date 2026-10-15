@@ -452,6 +452,12 @@
     });
 
     // ==================== Headers / Request / Response ====================
+    function normalizedName(name) {
+        const text = String(name);
+        if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(text)) throw new TypeError('Invalid header name.');
+        return text.toLowerCase();
+    }
+
     function normalizedValue(value) {
         const text = String(value).trim();
         if (/[\u0000\r\n]/.test(text)) {
@@ -467,11 +473,15 @@
             for (const [name, value] of internal(init).entries) map.set(name, value);
             return;
         }
-        if (Array.isArray(init)) {
-            for (const pair of init) map.set(String(pair[0]).toLowerCase(), normalizedValue(pair[1]));
+        if (typeof init[Symbol.iterator] === 'function') {
+            for (const pair of init) {
+                const entry = Array.from(pair);
+                if (entry.length !== 2) throw new TypeError('Each header pair must contain two items.');
+                target.append(entry[0], entry[1]);
+            }
             return;
         }
-        for (const name of Object.keys(init)) map.set(name.toLowerCase(), normalizedValue(init[name]));
+        for (const name of Object.keys(init)) target.append(name, init[name]);
     }
 
     defineInterface('Headers', {
@@ -483,14 +493,14 @@
         methods: {
             append(name, value) {
                 const map = internal(this).entries;
-                const key = String(name).toLowerCase();
+                const key = normalizedName(name);
                 const text = normalizedValue(value);
                 map.set(key, map.has(key) ? `${map.get(key)}, ${text}` : text);
             },
-            delete(name) { internal(this).entries.delete(String(name).toLowerCase()); },
-            get(name) { return internal(this).entries.get(String(name).toLowerCase()) ?? null; },
-            has(name) { return internal(this).entries.has(String(name).toLowerCase()); },
-            set(name, value) { internal(this).entries.set(String(name).toLowerCase(), normalizedValue(value)); },
+            delete(name) { internal(this).entries.delete(normalizedName(name)); },
+            get(name) { return internal(this).entries.get(normalizedName(name)) ?? null; },
+            has(name) { return internal(this).entries.has(normalizedName(name)); },
+            set(name, value) { internal(this).entries.set(normalizedName(name), normalizedValue(value)); },
             forEach(callback, thisArg = undefined) {
                 for (const [name, value] of internal(this).entries) callback.call(thisArg, value, name, this);
             },
@@ -502,8 +512,40 @@
     });
 
     function headersOf(init) {
-        if (init === undefined) return new window.Headers();
-        return init instanceof window.Headers ? init : new window.Headers(init);
+        // Request / Response 各自拥有 Headers，自动推导的头部不能写回调用者。
+        return new window.Headers(init);
+    }
+
+    function prepareBody(body, headers) {
+        if (body === null || body === undefined) return null;
+        let type = null;
+        if (body instanceof URLSearchParams) {
+            type = 'application/x-www-form-urlencoded;charset=UTF-8';
+            body = String(body);
+        } else if (body instanceof Blob) {
+            type = body.type || null;
+        } else if (body instanceof FormData) {
+            const boundary = '----SandboxFormBoundary' + Math.random().toString(36).slice(2);
+            const parts = [];
+            const escape = text => String(text).replace(/[\r\n"]/g, char =>
+                ({ '\r': '%0D', '\n': '%0A', '"': '%22' })[char]);
+            for (const [name, value] of body) {
+                let header = `--${boundary}\r\nContent-Disposition: form-data; name="${escape(name)}"`;
+                if (value instanceof Blob) {
+                    header += `; filename="${escape(value.name || 'blob')}"\r\nContent-Type: ${value.type || 'application/octet-stream'}`;
+                }
+                parts.push(header + '\r\n\r\n', value, '\r\n');
+            }
+            parts.push(`--${boundary}--\r\n`);
+            type = `multipart/form-data; boundary=${boundary}`;
+            body = new Blob(parts, { type });
+        } else if (!(body instanceof ArrayBuffer) && !ArrayBuffer.isView(body) &&
+            !(window.ReadableStream && body instanceof ReadableStream)) {
+            body = String(body);
+            type = 'text/plain;charset=UTF-8';
+        }
+        if (type && !headers.has('content-type')) headers.set('content-type', type);
+        return body;
     }
 
     function resolvedURL(value) {
@@ -518,13 +560,17 @@
         length: 1,
         construct(input, init = {}) {
             const options = init || {};
-            const source = input && typeof input === 'object' && 'url' in input ? input : null;
+            const source = idl.is(input, 'Request') ? input : null;
             const url = resolvedURL(source ? source.url : input);
             const method = String(options.method || (source && source.method) || 'GET').toUpperCase();
+            const headers = headersOf(options.headers ?? (source && source.headers));
+            const body = prepareBody(options.body == null ? (source ? internal(source).body : null) : options.body, headers);
+            if ((method === 'GET' || method === 'HEAD') && body !== null) {
+                throw new TypeError('Request with GET/HEAD method cannot have body.');
+            }
             Object.assign(internal(this), {
                 url, method,
-                headers: headersOf(options.headers ?? (source && source.headers)),
-                body: options.body === undefined ? (source ? source.body : null) : options.body,
+                headers, body,
                 bodyUsed: false,
                 credentials: options.credentials || (source && source.credentials) || 'same-origin',
                 cache: options.cache || (source && source.cache) || 'default',
@@ -557,6 +603,7 @@
     function bodyText(body) {
         if (body === null || body === undefined) return Promise.resolve('');
         if (typeof body === 'string') return Promise.resolve(body);
+        if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return Promise.resolve(new TextDecoder().decode(body));
         if (body && typeof body.text === 'function') return Promise.resolve(body.text());
         return Promise.resolve(String(body));
     }
@@ -570,10 +617,14 @@
                 return response;
             },
             json(data, init = {}) {
+                const headers = headersOf(init.headers);
+                if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+                const text = JSON.stringify(data);
+                if (text === undefined) throw new TypeError('Value is not JSON serializable.');
                 const options = Object.assign({}, init, {
-                    headers: Object.assign({ 'content-type': 'application/json' }, init.headers)
+                    headers
                 });
-                return Promise.resolve(new window.Response(JSON.stringify(data), options));
+                return new window.Response(text, options);
             },
             redirect(url, status = 302) {
                 const response = new window.Response(null, { status });
@@ -587,9 +638,10 @@
             if (status < 200 || status > 599) {
                 throw new RangeError(`Failed to construct 'Response': The status provided (${status}) is outside the range [200, 599].`);
             }
+            const headers = headersOf(options.headers);
             Object.assign(internal(this), {
                 status, statusText: options.statusText === undefined ? '' : String(options.statusText),
-                headers: headersOf(options.headers), body: body === undefined ? null : body, bodyUsed: false,
+                headers, body: prepareBody(body, headers), bodyUsed: false,
                 url: '', redirected: false, type: 'default'
             });
         },
@@ -630,9 +682,10 @@
                 }));
             },
             clone() {
+                if (internal(this).bodyUsed) throw new TypeError('Body has already been consumed.');
                 const clone = new window.Response(internal(this).body, { status: internal(this).status });
                 Object.assign(internal(clone), {
-                    headers: internal(this).headers, statusText: internal(this).statusText,
+                    headers: headersOf(internal(this).headers), statusText: internal(this).statusText,
                     url: internal(this).url, redirected: internal(this).redirected, type: internal(this).type
                 });
                 return clone;

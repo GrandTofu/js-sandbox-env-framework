@@ -48,5 +48,7 @@ export const browserEnvModules = [
     'env/encoding/textencoder.js',
     // Blob 等在 elements.js 之后加载：实例属性提升依赖 window.__liftOwnProperties__
     'env/webapi/blob.js',
-    'env/webapi/apis.js'
+    'env/webapi/apis.js',
+    // XHR 复用 Request / Headers 与 EventTarget，不再使用 GlobalScope 占位。
+    'env/webapi/xhr.js'
 ];

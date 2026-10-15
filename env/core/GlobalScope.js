@@ -1,6 +1,6 @@
 /**
  * @env-module GlobalScope
- * @description 在 VM 自身 realm 内建立全局作用域：window/self 访问器、console 输出转发、宿主桥接（URL、HTML 解析、定时器调度）与基础占位 API
+ * @description 在 VM 自身 realm 内建立全局作用域：window/self 访问器、console 输出转发、宿主桥接（URL、HTML 解析、定时器调度）
  * @compatibility Chrome 120+
  *
  * 与其他 env 模块不同，本文件的求值结果是一个安装函数，由 server/sandbox/browserContext.js 传入宿主桥接对象后调用。
@@ -12,7 +12,6 @@
     'use strict';
 
     const markNative = globalThis.safefunction;
-    const idl = globalThis.__webidl__;
 
     // 内部对象：不可枚举，供后续 env 模块在加载时取用
     function defineInternal(name, value) {
@@ -178,14 +177,4 @@
     });
     defineInternal('__htmlBridge__', htmlBridge);
 
-    // ==================== 基础占位 API（无 profile 时也存在） ====================
-    // XMLHttpRequest 占位：只接受调用，不发请求
-    idl.defineInterface('XMLHttpRequest', {
-        construct() {},
-        methods: {
-            open(method, url) {},
-            send(body = null) {},
-            setRequestHeader(name, value) {}
-        }
-    });
 })

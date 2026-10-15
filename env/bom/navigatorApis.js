@@ -221,7 +221,6 @@
         }
     });
 
-    /** 按 profile 创建 navigator 的子对象；battery 是 getBattery() 每次返回的同一个 Promise。 */
     // ==================== GPU / WebGPU ====================
     idl.defineInterface('GPU', {
         methods: {
@@ -245,46 +244,60 @@
         }
     });
 
-    // ==================== Keyboard / Mouse / Pointer ====================
-    defineEventTargetInterface('Keyboard', {
-        methods: { lock() {}, unlock() {}, getLayoutMap() { return Promise.resolve(new Map()); } }
+    // ==================== Keyboard ====================
+    idl.defineInterface('Keyboard', {
+        methods: {
+            lock(keyCodes = []) { return notAllowed(); },
+            unlock() {},
+            getLayoutMap() { return Promise.resolve(new Map()); }
+        }
     });
-    defineEventTargetInterface('Mouse', {
-        methods: { getMovementDelta() { return [0, 0]; } }
-    });
-    defineEventTargetInterface('PointerLock', {});
 
     // ==================== 设备能力接口 ====================
-    idl.defineInterface('Bluetooth', {
-        methods: { requestDevice() { return notAllowed(); }, requestLEScan() { return notAllowed(); } }
+    defineEventTargetInterface('Bluetooth', {
+        attributes: { onavailabilitychanged: handler('onavailabilitychanged') },
+        methods: {
+            getAvailability() { return Promise.resolve(false); },
+            getDevices() { return Promise.resolve([]); },
+            requestDevice(options) { return notAllowed(); }
+        }
     });
-    idl.defineInterface('USB', {
+    defineEventTargetInterface('USB', {
+        attributes: { onconnect: handler('onconnect'), ondisconnect: handler('ondisconnect') },
         methods: {
             getDevices() { return Promise.resolve([]); },
             requestDevice() { return Promise.reject(new DOMException('No device selected', 'NotFoundError')); }
         }
     });
-    idl.defineInterface('Serial', {
+    defineEventTargetInterface('Serial', {
+        attributes: { onconnect: handler('onconnect'), ondisconnect: handler('ondisconnect') },
         methods: {
             getPorts() { return Promise.resolve([]); },
             requestPort() { return Promise.reject(new DOMException('No port selected', 'NotFoundError')); }
         }
     });
-    idl.defineInterface('HID', {
+    defineEventTargetInterface('HID', {
+        attributes: { onconnect: handler('onconnect'), ondisconnect: handler('ondisconnect') },
         methods: {
             getDevices() { return Promise.resolve([]); },
             requestDevice() { return Promise.reject(new DOMException('No device selected', 'NotFoundError')); }
         }
     });
-    idl.defineInterface('XRSystem', {
+    defineEventTargetInterface('XRSystem', {
+        attributes: { ondevicechange: handler('ondevicechange') },
         methods: {
             isSessionSupported() { return Promise.resolve(false); },
             requestSession() { return Promise.reject(new DOMException('XR not supported', 'NotSupportedError')); }
         }
     });
-    defineEventTargetInterface('Presentation', {
-        attributes: { receiver: { get() { return null; } } },
-        methods: { requestSession() { return Promise.resolve(null); } }
+    idl.defineInterface('Presentation', {
+        attributes: {
+            receiver() { return null; },
+            defaultRequest: {
+                get() { return idl.internal(this).defaultRequest ?? null; },
+                set(value) { idl.internal(this).defaultRequest = value; }
+            }
+        }
     });
 
     // ==================== gamepad / midi / media key system ====================
@@ -432,15 +445,12 @@
             userActivation: idl.create('UserActivation', { isActive: false, hasBeenActive: false }),
             mediaCapabilities: idl.create('MediaCapabilities'),
             keyboard: idl.create('Keyboard'),
-            mouse: idl.create('Mouse'),
             bluetooth: idl.create('Bluetooth'),
             usb: idl.create('USB'),
             serial: idl.create('Serial'),
             hid: idl.create('HID'),
             xr: idl.create('XRSystem'),
             presentation: idl.create('Presentation'),
-            gamepad: idl.create('Gamepad', { id: '', index: 0, connected: false, buttons: [], axes: [] }),
-            midi: idl.create('MIDIAccess'),
             battery: Promise.resolve(battery)
         };
     }
