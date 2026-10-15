@@ -41,7 +41,19 @@
                 ? data.objects : data;
             for (const [key, value] of Object.entries(snapshot)) {
                 if (blocked.has(key) || key.startsWith('__') || key === 'window') continue;
-                if (browserObjects.has(key)) {
+                if (key === 'navigator' && typeof window.__applyNavigatorSnapshot__ === 'function') {
+                    // navigator 属性是原型上的只读 getter，快照写入其内部状态
+                    window.__applyNavigatorSnapshot__(value);
+                } else if (key === 'document' && typeof window.__applyDocumentSnapshot__ === 'function') {
+                    // document 属性在 Document.prototype 上且多数只读，快照写入其内部状态
+                    window.__applyDocumentSnapshot__(value);
+                } else if (key === 'screen' && typeof window.__applyScreenSnapshot__ === 'function') {
+                    // screen 属性是原型上的只读 getter，快照写入其内部状态
+                    window.__applyScreenSnapshot__(value);
+                } else if (key === 'performance' && typeof window.__applyPerformanceSnapshot__ === 'function') {
+                    // performance 属性是原型上的只读 getter，快照写入其内部状态
+                    window.__applyPerformanceSnapshot__(value);
+                } else if (browserObjects.has(key)) {
                     merge(window[key], value);
                 } else if (!['timezone', 'webgl', 'canvas', 'audio', 'features', 'cookies'].includes(key)) {
                     // Flat snapshots may also contain extra, serializable globals.

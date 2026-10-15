@@ -15,97 +15,28 @@
     };
     
     // ==================== Event 基类 ====================
-    function Event(type, eventInitDict) {
-        eventInitDict = eventInitDict || {};
-        
-        this.type = type || '';
-        this.target = null;
-        this.currentTarget = null;
-        this.eventPhase = 0;
-        this.bubbles = !!eventInitDict.bubbles;
-        this.cancelable = !!eventInitDict.cancelable;
-        this.composed = !!eventInitDict.composed;
-        this.defaultPrevented = false;
-        this.isTrusted = false;
-        this.timeStamp = Date.now();
-        
-        this._propagationStopped = false;
-        this._immediatePropagationStopped = false;
-        
-        Monitor.log('Event', 'create', { type: type, bubbles: this.bubbles, cancelable: this.cancelable });
-    }
-    
-    Event.prototype = {
-        // 事件阶段常量
-        NONE: 0,
-        CAPTURING_PHASE: 1,
-        AT_TARGET: 2,
-        BUBBLING_PHASE: 3,
-        
-        preventDefault: function() {
-            if (this.cancelable) {
-                this.defaultPrevented = true;
-                Monitor.log('Event', 'preventDefault', { type: this.type });
-            }
-        },
-        
-        stopPropagation: function() {
-            this._propagationStopped = true;
-            Monitor.log('Event', 'stopPropagation', { type: this.type });
-        },
-        
-        stopImmediatePropagation: function() {
-            this._propagationStopped = true;
-            this._immediatePropagationStopped = true;
-            Monitor.log('Event', 'stopImmediatePropagation', { type: this.type });
-        },
-        
-        composedPath: function() {
-            const path = [];
-            let current = this.target;
-            while (current) {
-                path.push(current);
-                current = current.parentNode;
-            }
-            if (path.length > 0) {
-                path.push(window);
-            }
-            return path;
-        },
-        
-        initEvent: function(type, bubbles, cancelable) {
-            this.type = type;
-            this.bubbles = bubbles;
-            this.cancelable = cancelable;
-        }
-    };
-    
-    // 静态常量
-    Event.NONE = 0;
-    Event.CAPTURING_PHASE = 1;
-    Event.AT_TARGET = 2;
-    Event.BUBBLING_PHASE = 3;
-    
-    window.Event = Event;
+    // Event / EventTarget / AbortSignal / AbortController 由 eventCore.js 按 WebIDL 定义；
+    // 下面的旧式子类通过 initLegacyEvent 获得 Event 身份与内部状态
+    const Event = window.Event;
+    const initLegacyEvent = window.__eventInternals__.initLegacy;
     
     // ==================== CustomEvent ====================
     function CustomEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         this.detail = eventInitDict?.detail ?? null;
     }
     CustomEvent.prototype = Object.create(Event.prototype);
     CustomEvent.prototype.constructor = CustomEvent;
     CustomEvent.prototype.initCustomEvent = function(type, bubbles, cancelable, detail) {
-        this.type = type;
-        this.bubbles = bubbles;
-        this.cancelable = cancelable;
+        // type/bubbles/cancelable 是 Event.prototype 上的只读属性，经 initEvent 写入内部状态
+        this.initEvent(type, bubbles, cancelable);
         this.detail = detail;
     };
     window.CustomEvent = CustomEvent;
     
     // ==================== UIEvent ====================
     function UIEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         this.view = eventInitDict.view || window;
         this.detail = eventInitDict.detail || 0;
@@ -461,7 +392,7 @@
     
     // ==================== ClipboardEvent ====================
     function ClipboardEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         this.clipboardData = eventInitDict?.clipboardData || new DataTransfer();
     }
     ClipboardEvent.prototype = Object.create(Event.prototype);
@@ -470,7 +401,7 @@
     
     // ==================== MessageEvent ====================
     function MessageEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.data = eventInitDict.data ?? null;
@@ -495,7 +426,7 @@
     
     // ==================== ErrorEvent ====================
     function ErrorEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.message = eventInitDict.message || '';
@@ -510,7 +441,7 @@
     
     // ==================== ProgressEvent ====================
     function ProgressEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.lengthComputable = !!eventInitDict.lengthComputable;
@@ -523,7 +454,7 @@
     
     // ==================== StorageEvent ====================
     function StorageEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.key = eventInitDict.key || null;
@@ -546,7 +477,7 @@
     
     // ==================== HashChangeEvent ====================
     function HashChangeEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.oldURL = eventInitDict.oldURL || '';
@@ -558,7 +489,7 @@
     
     // ==================== PopStateEvent ====================
     function PopStateEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         this.state = eventInitDict?.state ?? null;
     }
     PopStateEvent.prototype = Object.create(Event.prototype);
@@ -567,7 +498,7 @@
     
     // ==================== PageTransitionEvent ====================
     function PageTransitionEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         this.persisted = !!eventInitDict?.persisted;
     }
     PageTransitionEvent.prototype = Object.create(Event.prototype);
@@ -576,7 +507,7 @@
     
     // ==================== AnimationEvent ====================
     function AnimationEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.animationName = eventInitDict.animationName || '';
@@ -589,7 +520,7 @@
     
     // ==================== TransitionEvent ====================
     function TransitionEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.propertyName = eventInitDict.propertyName || '';
@@ -602,16 +533,31 @@
     
     // ==================== BeforeUnloadEvent ====================
     function BeforeUnloadEvent(type, eventInitDict) {
-        Event.call(this, type || 'beforeunload', eventInitDict);
-        this.returnValue = '';
+        initLegacyEvent(this, type || 'beforeunload', eventInitDict);
     }
     BeforeUnloadEvent.prototype = Object.create(Event.prototype);
     BeforeUnloadEvent.prototype.constructor = BeforeUnloadEvent;
+    // BeforeUnloadEvent 的 returnValue 是字符串，遮蔽 Event.prototype 上的布尔版本
+    const beforeUnloadAccessors = {
+        get returnValue() { return window.__webidl__.internal(this)?.unloadReturnValue ?? ''; },
+        set returnValue(value) {
+            const state = window.__webidl__.internal(this);
+            if (!state) throw new TypeError('Illegal invocation');
+            state.unloadReturnValue = String(value);
+            if (state.unloadReturnValue && state.cancelable) state.canceled = true;
+        }
+    };
+    const beforeUnloadDescriptor = Object.getOwnPropertyDescriptor(beforeUnloadAccessors, 'returnValue');
+    Object.defineProperty(BeforeUnloadEvent.prototype, 'returnValue', {
+        get: window.safefunction(beforeUnloadDescriptor.get, 'get returnValue'),
+        set: window.safefunction(beforeUnloadDescriptor.set, 'set returnValue'),
+        enumerable: true, configurable: true
+    });
     window.BeforeUnloadEvent = BeforeUnloadEvent;
     
     // ==================== SecurityPolicyViolationEvent ====================
     function SecurityPolicyViolationEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.documentURI = eventInitDict.documentURI || '';
@@ -633,7 +579,7 @@
     
     // ==================== PromiseRejectionEvent ====================
     function PromiseRejectionEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         eventInitDict = eventInitDict || {};
         
         this.promise = eventInitDict.promise || null;
@@ -645,7 +591,7 @@
     
     // ==================== FormDataEvent ====================
     function FormDataEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         this.formData = eventInitDict?.formData || new FormData();
     }
     FormDataEvent.prototype = Object.create(Event.prototype);
@@ -654,51 +600,15 @@
     
     // ==================== SubmitEvent ====================
     function SubmitEvent(type, eventInitDict) {
-        Event.call(this, type, eventInitDict);
+        initLegacyEvent(this, type, eventInitDict);
         this.submitter = eventInitDict?.submitter || null;
     }
     SubmitEvent.prototype = Object.create(Event.prototype);
     SubmitEvent.prototype.constructor = SubmitEvent;
     window.SubmitEvent = SubmitEvent;
     
-    // ==================== ResizeObserverEntry ====================
-    function ResizeObserverEntry(target) {
-        this.target = target;
-        this.contentRect = new DOMRect(0, 0, target.offsetWidth || 0, target.offsetHeight || 0);
-        this.borderBoxSize = [{ inlineSize: target.offsetWidth || 0, blockSize: target.offsetHeight || 0 }];
-        this.contentBoxSize = [{ inlineSize: target.clientWidth || 0, blockSize: target.clientHeight || 0 }];
-        this.devicePixelContentBoxSize = [{ inlineSize: target.clientWidth || 0, blockSize: target.clientHeight || 0 }];
-    }
-    window.ResizeObserverEntry = ResizeObserverEntry;
-    
-    // ==================== IntersectionObserverEntry ====================
-    function IntersectionObserverEntry(options) {
-        options = options || {};
-        this.time = options.time || Date.now();
-        this.rootBounds = options.rootBounds || null;
-        this.boundingClientRect = options.boundingClientRect || new DOMRect(0, 0, 0, 0);
-        this.intersectionRect = options.intersectionRect || new DOMRect(0, 0, 0, 0);
-        this.isIntersecting = options.isIntersecting || false;
-        this.intersectionRatio = options.intersectionRatio || 0;
-        this.target = options.target || null;
-    }
-    window.IntersectionObserverEntry = IntersectionObserverEntry;
-    
-    // ==================== MutationRecord ====================
-    function MutationRecord(options) {
-        options = options || {};
-        this.type = options.type || 'attributes';
-        this.target = options.target || null;
-        this.addedNodes = options.addedNodes || [];
-        this.removedNodes = options.removedNodes || [];
-        this.previousSibling = options.previousSibling || null;
-        this.nextSibling = options.nextSibling || null;
-        this.attributeName = options.attributeName || null;
-        this.attributeNamespace = options.attributeNamespace || null;
-        this.oldValue = options.oldValue || null;
-    }
-    window.MutationRecord = MutationRecord;
-    
+    // ResizeObserverEntry / IntersectionObserverEntry / MutationRecord 由 env/dom/observerApis.js 提供
+
     // ==================== DOMRect (如果尚未定义) ====================
     if (!window.DOMRect) {
         function DOMRect(x, y, width, height) {
@@ -711,152 +621,51 @@
             this.right = this.x + this.width;
             this.bottom = this.y + this.height;
         }
-        DOMRect.fromRect = function(rect) {
+        Object.defineProperty(DOMRect.prototype, Symbol.toStringTag, { value: 'DOMRect', configurable: true });
+    DOMRect.fromRect = function(rect) {
             return new DOMRect(rect?.x, rect?.y, rect?.width, rect?.height);
         };
         window.DOMRect = DOMRect;
     }
-    
-    // ==================== EventTarget (增强) ====================
-    function EventTarget() {
-        this._eventListeners = {};
+
+    // 旧式子类的原型没有自己的 toStringTag，否则会继承 Event.prototype 的 '[object Event]'
+    const legacyEventNames = [
+        'CustomEvent', 'UIEvent', 'MouseEvent', 'PointerEvent', 'WheelEvent', 'KeyboardEvent',
+        'InputEvent', 'FocusEvent', 'TouchEvent', 'CompositionEvent', 'DragEvent', 'ClipboardEvent',
+        'MessageEvent', 'ErrorEvent', 'ProgressEvent', 'StorageEvent', 'HashChangeEvent',
+        'PopStateEvent', 'PageTransitionEvent', 'AnimationEvent', 'TransitionEvent',
+        'BeforeUnloadEvent', 'SecurityPolicyViolationEvent', 'PromiseRejectionEvent',
+        'FormDataEvent', 'SubmitEvent'
+    ];
+    // 事件实例与浏览器一致，只保留 isTrusted 一个自有属性：构造后把子类字段提升到原型
+    function liftEvent(instance) {
+        window.__elementProps__?.lift(instance);
+        return instance;
     }
-    
-    EventTarget.prototype = {
-        addEventListener: function(type, listener, options) {
-            if (!this._eventListeners[type]) {
-                this._eventListeners[type] = [];
-            }
-            const capture = typeof options === 'boolean' ? options : (options?.capture || false);
-            const once = options?.once || false;
-            const passive = options?.passive || false;
-            
-            this._eventListeners[type].push({
-                listener: listener,
-                capture: capture,
-                once: once,
-                passive: passive
-            });
-            
-            Monitor.log('Event', 'addEventListener', { type, capture, once, passive });
-        },
-        
-        removeEventListener: function(type, listener, options) {
-            if (!this._eventListeners[type]) return;
-            
-            const capture = typeof options === 'boolean' ? options : (options?.capture || false);
-            
-            this._eventListeners[type] = this._eventListeners[type].filter(item => {
-                return item.listener !== listener || item.capture !== capture;
-            });
-            
-            Monitor.log('Event', 'removeEventListener', { type });
-        },
-        
-        dispatchEvent: function(event) {
-            event.target = this;
-            event.currentTarget = this;
-            
-            const listeners = this._eventListeners[event.type] || [];
-            const toRemove = [];
-            
-            for (let i = 0; i < listeners.length; i++) {
-                if (event._immediatePropagationStopped) break;
-                
-                const item = listeners[i];
-                try {
-                    if (typeof item.listener === 'function') {
-                        item.listener.call(this, event);
-                    } else if (item.listener && typeof item.listener.handleEvent === 'function') {
-                        item.listener.handleEvent.call(item.listener, event);
-                    }
-                } catch (e) {
-                    console.error('Error in event handler:', e);
-                }
-                
-                if (item.once) {
-                    toRemove.push(item);
-                }
-            }
-            
-            // 移除 once 监听器
-            toRemove.forEach(item => {
-                this.removeEventListener(event.type, item.listener, { capture: item.capture });
-            });
-            
-            Monitor.log('Event', 'dispatchEvent', { type: event.type, defaultPrevented: event.defaultPrevented });
-            
-            return !event.defaultPrevented;
-        }
-    };
-    
-    window.EventTarget = EventTarget;
-    
-    // ==================== AbortController & AbortSignal ====================
-    function AbortSignal() {
-        EventTarget.call(this);
-        this.aborted = false;
-        this.reason = undefined;
-        this.onabort = null;
+    for (const name of legacyEventNames) {
+        const Constructor = window[name];
+        if (typeof Constructor !== 'function' || !Constructor.prototype) continue;
+        Object.defineProperty(Constructor.prototype, Symbol.toStringTag, { value: name, configurable: true });
+        const wrapper = function (...args) {
+            return liftEvent(new Constructor(...args));
+        };
+        Object.defineProperty(wrapper, 'name', { value: name, configurable: true });
+        Object.defineProperty(wrapper, 'prototype', { value: Constructor.prototype });
+        Object.defineProperty(Constructor.prototype, 'constructor',
+            { value: wrapper, writable: true, configurable: true });
+        window[name] = wrapper;
     }
-    AbortSignal.prototype = Object.create(EventTarget.prototype);
-    AbortSignal.prototype.constructor = AbortSignal;
-    AbortSignal.prototype.throwIfAborted = function() {
-        if (this.aborted) {
-            throw this.reason;
-        }
-    };
-    AbortSignal.abort = function(reason) {
-        const signal = new AbortSignal();
-        signal.aborted = true;
-        signal.reason = reason !== undefined ? reason : new DOMException('signal is aborted without reason', 'AbortError');
-        return signal;
-    };
-    AbortSignal.timeout = function(milliseconds) {
-        const signal = new AbortSignal();
-        setTimeout(() => {
-            signal.aborted = true;
-            signal.reason = new DOMException('signal timed out', 'TimeoutError');
-            signal.dispatchEvent(new Event('abort'));
-            if (signal.onabort) signal.onabort();
-        }, milliseconds);
-        return signal;
-    };
-    AbortSignal.any = function(signals) {
-        const signal = new AbortSignal();
-        for (const s of signals) {
-            if (s.aborted) {
-                signal.aborted = true;
-                signal.reason = s.reason;
-                return signal;
-            }
-            s.addEventListener('abort', () => {
-                if (!signal.aborted) {
-                    signal.aborted = true;
-                    signal.reason = s.reason;
-                    signal.dispatchEvent(new Event('abort'));
-                }
-            });
-        }
-        return signal;
-    };
-    window.AbortSignal = AbortSignal;
-    
-    function AbortController() {
-        this.signal = new AbortSignal();
+    // 同一处理：Touch / DataTransfer 系列实例也应只在原型上有属性
+    for (const name of ['Touch', 'TouchList', 'DataTransfer', 'DataTransferItem', 'DataTransferItemList']) {
+        const Constructor = window[name];
+        if (typeof Constructor !== 'function' || !Constructor.prototype) continue;
+        const wrapper = function (...args) {
+            return liftEvent(new Constructor(...args));
+        };
+        Object.defineProperty(wrapper, 'name', { value: name, configurable: true });
+        Object.defineProperty(wrapper, 'prototype', { value: Constructor.prototype });
+        Object.defineProperty(Constructor.prototype, 'constructor',
+            { value: wrapper, writable: true, configurable: true });
+        window[name] = wrapper;
     }
-    AbortController.prototype.abort = function(reason) {
-        if (this.signal.aborted) return;
-        
-        this.signal.aborted = true;
-        this.signal.reason = reason !== undefined ? reason : new DOMException('signal is aborted without reason', 'AbortError');
-        this.signal.dispatchEvent(new Event('abort'));
-        if (this.signal.onabort) {
-            this.signal.onabort();
-        }
-        
-        Monitor.log('Event', 'AbortController.abort', { reason: String(reason) });
-    };
-    window.AbortController = AbortController;
-    
 })();

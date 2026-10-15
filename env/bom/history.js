@@ -18,8 +18,9 @@
         if (next < 0 || next >= entries.length || next === index) return;
         index = next;
         window.location.href = entries[index].url;
-        if (typeof window.dispatchEvent === 'function') {
-            window.dispatchEvent({ type: 'popstate', state: entries[index].state });
+        // dispatchEvent 只接受 Event 对象；PopStateEvent 由 event.js 提供
+        if (typeof window.dispatchEvent === 'function' && typeof window.PopStateEvent === 'function') {
+            window.dispatchEvent(new window.PopStateEvent('popstate', { state: entries[index].state }));
         }
     }
 

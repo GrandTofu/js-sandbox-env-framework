@@ -440,9 +440,9 @@ export class SandboxManager {
                     files = files.filter(f => !priorityFiles.includes(f) && f !== '_index.js');
                 }
                 
-                // dom 目录：确保 document.js 在 elements.js 之前加载
+                // dom 目录：确保 document.js / webgl.js 在 elements.js 之前加载
                 if (category === 'dom') {
-                    const priorityOrder = ['event.js', 'document.js', 'elements.js'];
+                    const priorityOrder = ['event.js', 'document.js', 'webgl.js', 'elements.js'];
                     // 按优先顺序加载
                     for (const pf of priorityOrder) {
                         if (files.includes(pf)) {

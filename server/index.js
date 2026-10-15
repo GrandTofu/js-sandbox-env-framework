@@ -165,6 +165,11 @@ app.listen(PORT, '0.0.0.0', async () => {
     }
 });
 
+// 沙箱页面里未处理的 Promise 拒绝只记录，不让服务进程退出
+process.on('unhandledRejection', reason => {
+    console.error('[Sandbox] Uncaught (in promise)', reason);
+});
+
 // 优雅关闭
 process.on('SIGTERM', async () => {
     console.log('收到SIGTERM信号，正在关闭服务...');

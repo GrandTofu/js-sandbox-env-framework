@@ -228,7 +228,7 @@
     // ==================== 样式计算 ====================
     window.getComputedStyle = function(element, pseudoElement) {
         Monitor.log('Window', 'getComputedStyle', { 
-            elementId: element?.__id__,
+            elementId: window.__nodeIdOf__?.(element),
             tagName: element?.tagName,
             pseudoElement 
         });
@@ -440,11 +440,7 @@
         }
     };
     
-    // ==================== queueMicrotask ====================
-    window.queueMicrotask = function(callback) {
-        Monitor.log('Window', 'queueMicrotask', {});
-        Promise.resolve().then(callback);
-    };
+    // queueMicrotask 由 env/timer/timeout.js 提供（基础模块，先于本文件加载）
     
     // ==================== reportError ====================
     window.reportError = function(error) {
@@ -472,35 +468,7 @@
         };
     }
     
-    // ==================== 事件监听 ====================
-    const windowEventListeners = {};
-    
-    window.addEventListener = function(type, listener, options) {
-        if (!windowEventListeners[type]) {
-            windowEventListeners[type] = [];
-        }
-        windowEventListeners[type].push({ listener, options });
-        Monitor.log('Event', 'addEventListener', { target: 'window', type });
-    };
-    
-    window.removeEventListener = function(type, listener, options) {
-        if (windowEventListeners[type]) {
-            windowEventListeners[type] = windowEventListeners[type].filter(l => l.listener !== listener);
-        }
-        Monitor.log('Event', 'removeEventListener', { target: 'window', type });
-    };
-    
-    window.dispatchEvent = function(event) {
-        if (!event.target) event.target = window;
-        event.currentTarget = window;
-        const listeners = windowEventListeners[event.type] || [];
-        listeners.forEach(({ listener }) => {
-            if (typeof listener === 'function') {
-                listener.call(window, event);
-            }
-        });
-        return !event.defaultPrevented;
-    };
+    // 事件监听：addEventListener / removeEventListener / dispatchEvent 由 eventCore.js 提供（Window 继承 EventTarget）
     
     // ==================== 全屏 API ====================
     window.requestFullscreen = function() {
@@ -707,144 +675,12 @@
         return Promise.resolve(result);
     };
     
-    // ==================== Clipboard API ====================
-    if (!window.navigator) window.navigator = {};
+    // Clipboard API 由 navigator.js 提供（navigator.clipboard 是 Navigator.prototype 上的只读属性）
+
+    // screen.orientation 由 screen.js 提供（ScreenOrientation 继承 EventTarget）
     
-    window.navigator.clipboard = {
-        read: function() {
-            Monitor.log('Clipboard', 'read', {});
-            return Promise.resolve([]);
-        },
-        readText: function() {
-            Monitor.log('Clipboard', 'readText', {});
-            return Promise.resolve('');
-        },
-        write: function(data) {
-            Monitor.log('Clipboard', 'write', {});
-            return Promise.resolve();
-        },
-        writeText: function(text) {
-            Monitor.log('Clipboard', 'writeText', { text: text?.substring(0, 50) });
-            return Promise.resolve();
-        }
-    };
-    
-    // ==================== Screen Orientation ====================
-    window.screen = window.screen || {};
-    window.screen.orientation = {
-        type: 'landscape-primary',
-        angle: 0,
-        onchange: null,
-        lock: function(orientation) {
-            Monitor.log('ScreenOrientation', 'lock', { orientation });
-            return Promise.resolve();
-        },
-        unlock: function() {
-            Monitor.log('ScreenOrientation', 'unlock', {});
-        },
-        addEventListener: function() {},
-        removeEventListener: function() {},
-        dispatchEvent: function() { return true; }
-    };
-    
-    // ==================== ResizeObserver ====================
-    window.ResizeObserver = function(callback) {
-        Monitor.log('Window', 'ResizeObserver', {});
-        
-        this._callback = callback;
-        this._targets = [];
-        
-        this.observe = function(target, options) {
-            Monitor.log('ResizeObserver', 'observe', { elementId: target?.__id__ });
-            this._targets.push({ target, options });
-        };
-        
-        this.unobserve = function(target) {
-            Monitor.log('ResizeObserver', 'unobserve', { elementId: target?.__id__ });
-            this._targets = this._targets.filter(t => t.target !== target);
-        };
-        
-        this.disconnect = function() {
-            Monitor.log('ResizeObserver', 'disconnect', {});
-            this._targets = [];
-        };
-    };
-    
-    // ==================== IntersectionObserver ====================
-    window.IntersectionObserver = function(callback, options) {
-        Monitor.log('Window', 'IntersectionObserver', { options });
-        
-        this._callback = callback;
-        this._options = options || {};
-        this._targets = [];
-        
-        this.root = options?.root || null;
-        this.rootMargin = options?.rootMargin || '0px';
-        this.thresholds = options?.threshold 
-            ? (Array.isArray(options.threshold) ? options.threshold : [options.threshold])
-            : [0];
-        
-        this.observe = function(target) {
-            Monitor.log('IntersectionObserver', 'observe', { elementId: target?.__id__ });
-            this._targets.push(target);
-            
-            // 模拟初始回调
-            const self = this;
-            setTimeout(() => {
-                if (self._callback) {
-                    self._callback([{
-                        target: target,
-                        isIntersecting: true,
-                        intersectionRatio: 1,
-                        boundingClientRect: target.getBoundingClientRect ? target.getBoundingClientRect() : {},
-                        intersectionRect: target.getBoundingClientRect ? target.getBoundingClientRect() : {},
-                        rootBounds: null,
-                        time: Date.now()
-                    }], self);
-                }
-            }, 0);
-        };
-        
-        this.unobserve = function(target) {
-            Monitor.log('IntersectionObserver', 'unobserve', { elementId: target?.__id__ });
-            this._targets = this._targets.filter(t => t !== target);
-        };
-        
-        this.disconnect = function() {
-            Monitor.log('IntersectionObserver', 'disconnect', {});
-            this._targets = [];
-        };
-        
-        this.takeRecords = function() {
-            return [];
-        };
-    };
-    
-    // ==================== MutationObserver ====================
-    window.MutationObserver = function(callback) {
-        Monitor.log('Window', 'MutationObserver', {});
-        
-        this._callback = callback;
-        this._targets = [];
-        
-        this.observe = function(target, options) {
-            Monitor.log('MutationObserver', 'observe', { 
-                elementId: target?.__id__,
-                options 
-            });
-            this._targets.push({ target, options });
-        };
-        
-        this.disconnect = function() {
-            Monitor.log('MutationObserver', 'disconnect', {});
-            this._targets = [];
-        };
-        
-        this.takeRecords = function() {
-            return [];
-        };
-    };
-    
+    // ResizeObserver / IntersectionObserver / MutationObserver 由 env/dom/observerApis.js 提供
+
     // ==================== PerformanceObserver ====================
     window.PerformanceObserver = function(callback) {
         Monitor.log('Window', 'PerformanceObserver', {});

@@ -1,266 +1,250 @@
 /**
- * @env-module URL/URLSearchParams
- * @description URL和URLSearchParams模拟
- * @compatibility Chrome 80+, Firefox 75+, Edge 79+
+ * @env-module url
+ * @description WHATWG URL 与 URLSearchParams：接口形态按 WebIDL 定义；解析与表单编码委托宿主的 WHATWG 实现，只交换字符串
+ * @compatibility Chrome 120+
  */
+(function () {
+    'use strict';
 
-(function() {
-    // URLSearchParams
-    function URLSearchParams(init) {
-        this._params = [];
-        
-        if (init) {
-            if (typeof init === 'string') {
-                this._parseString(init);
-            } else if (init instanceof URLSearchParams) {
-                init.forEach((value, key) => {
-                    this.append(key, value);
-                });
-            } else if (Array.isArray(init)) {
-                init.forEach(([key, value]) => {
-                    this.append(key, value);
-                });
-            } else if (typeof init === 'object') {
-                Object.entries(init).forEach(([key, value]) => {
-                    this.append(key, value);
-                });
-            }
-        }
+    const idl = window.__webidl__;
+    const bridge = window.__host__.url;
+    const markNative = window.safefunction;
+
+    function toUSVString(value) {
+        return String(value).toWellFormed();
     }
 
-    URLSearchParams.prototype = {
-        _parseString: function(str) {
-            str = str.replace(/^\?/, '');
-            if (!str) return;
-            
-            str.split('&').forEach(pair => {
-                const [key, value = ''] = pair.split('=').map(decodeURIComponent);
-                this.append(key, value);
-            });
-        },
+    // ==================== URLSearchParams ====================
+    function queryStateOf(params) {
+        return idl.internal(params);
+    }
 
-        append: function(name, value) {
-            this._params.push([String(name), String(value)]);
-        },
+    // 列表变化后同步回关联的 URL（URL 标准 "update steps"）
+    function updateURL(state) {
+        if (!state.url) return;
+        const urlState = idl.internal(state.url);
+        urlState.record = bridge.update(urlState.record.href, 'search', bridge.serializeQuery(state.list));
+    }
 
-        delete: function(name) {
-            this._params = this._params.filter(([key]) => key !== name);
-        },
-
-        get: function(name) {
-            const param = this._params.find(([key]) => key === name);
-            return param ? param[1] : null;
-        },
-
-        getAll: function(name) {
-            return this._params.filter(([key]) => key === name).map(([, value]) => value);
-        },
-
-        has: function(name) {
-            return this._params.some(([key]) => key === name);
-        },
-
-        set: function(name, value) {
-            let found = false;
-            this._params = this._params.reduce((acc, [key, val]) => {
-                if (key === name) {
-                    if (!found) {
-                        acc.push([key, String(value)]);
-                        found = true;
+    function listFromInit(init) {
+        if (init !== null && (typeof init === 'object' || typeof init === 'function')) {
+            if (typeof init[Symbol.iterator] === 'function') {
+                const list = [];
+                for (const pair of init) {
+                    const items = Array.from(pair);
+                    if (items.length !== 2) {
+                        throw new TypeError("Failed to construct 'URLSearchParams': Sequence initializer must only contain pair elements");
                     }
-                } else {
-                    acc.push([key, val]);
+                    list.push([toUSVString(items[0]), toUSVString(items[1])]);
                 }
-                return acc;
-            }, []);
-            if (!found) {
-                this.append(name, value);
+                return list;
             }
-        },
+            return Object.keys(init).map(key => [toUSVString(key), toUSVString(init[key])]);
+        }
+        const query = toUSVString(init);
+        return bridge.parseQuery(query.startsWith('?') ? query.slice(1) : query);
+    }
 
-        sort: function() {
-            this._params.sort((a, b) => a[0].localeCompare(b[0]));
-        },
-
-        toString: function() {
-            return this._params
-                .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-                .join('&');
-        },
-
-        forEach: function(callback, thisArg) {
-            this._params.forEach(([key, value]) => {
-                callback.call(thisArg, value, key, this);
-            });
-        },
-
-        entries: function() {
-            return this._params[Symbol.iterator]();
-        },
-
-        keys: function() {
-            return this._params.map(([key]) => key)[Symbol.iterator]();
-        },
-
-        values: function() {
-            return this._params.map(([, value]) => value)[Symbol.iterator]();
-        },
-
-        [Symbol.iterator]: function() {
-            return this.entries();
-        },
-
-        get size() {
-            return this._params.length;
+    // URLSearchParams 迭代器：原型链 → %IteratorPrototype%，与 Chrome 相同的 toStringTag
+    const iteratorStates = new WeakMap();
+    const IteratorPrototype = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));
+    const iteratorPrototype = Object.create(IteratorPrototype);
+    const nextHolder = {
+        next() {
+            const iterator = iteratorStates.get(this);
+            if (!iterator) throw new TypeError('Illegal invocation');
+            const list = iterator.state.list;
+            if (iterator.index >= list.length) return { value: undefined, done: true };
+            const [name, value] = list[iterator.index++];
+            if (iterator.kind === 'key') return { value: name, done: false };
+            if (iterator.kind === 'value') return { value, done: false };
+            return { value: [name, value], done: false };
         }
     };
+    Object.defineProperty(iteratorPrototype, 'next', {
+        value: markNative(nextHolder.next), writable: true, enumerable: true, configurable: true
+    });
+    Object.defineProperty(iteratorPrototype, Symbol.toStringTag, {
+        value: 'URLSearchParams Iterator', configurable: true
+    });
 
-    // URL
-    function URL(url, base) {
-        let fullUrl = url;
-        
-        if (base) {
-            // 处理相对URL
-            if (!url.match(/^[a-z]+:/i)) {
-                const baseUrl = typeof base === 'string' ? base : base.href;
-                if (url.startsWith('//')) {
-                    const protocol = baseUrl.match(/^([a-z]+:)/i)?.[1] || 'https:';
-                    fullUrl = protocol + url;
-                } else if (url.startsWith('/')) {
-                    const origin = baseUrl.match(/^([a-z]+:\/\/[^\/]+)/i)?.[1] || '';
-                    fullUrl = origin + url;
-                } else {
-                    const basePath = baseUrl.replace(/\/[^\/]*$/, '/');
-                    fullUrl = basePath + url;
-                }
-            }
-        }
-
-        // 解析URL
-        const match = fullUrl.match(/^([a-z]+:)\/\/(?:([^:@]+)(?::([^@]+))?@)?([^:\/\?#]+)(?::(\d+))?(\/[^\?#]*)?(\?[^#]*)?(#.*)?$/i);
-        
-        if (!match) {
-            throw new TypeError(`Invalid URL: ${fullUrl}`);
-        }
-
-        this._protocol = match[1];
-        this._username = match[2] || '';
-        this._password = match[3] || '';
-        this._hostname = match[4];
-        this._port = match[5] || '';
-        this._pathname = match[6] || '/';
-        this._search = match[7] || '';
-        this._hash = match[8] || '';
-        this._searchParams = new URLSearchParams(this._search);
+    function createIterator(params, kind) {
+        const iterator = Object.create(iteratorPrototype);
+        iteratorStates.set(iterator, { state: queryStateOf(params), kind, index: 0 });
+        return iterator;
     }
 
-    Object.defineProperties(URL.prototype, {
-        href: {
-            get: function() {
-                let auth = '';
-                if (this._username) {
-                    auth = this._password 
-                        ? `${this._username}:${this._password}@` 
-                        : `${this._username}@`;
-                }
-                const port = this._port ? `:${this._port}` : '';
-                return `${this._protocol}//${auth}${this._hostname}${port}${this._pathname}${this._search}${this._hash}`;
+    const URLSearchParams = idl.defineInterface('URLSearchParams', {
+        construct(init = '') {
+            const state = queryStateOf(this);
+            state.list = listFromInit(init);
+            state.url = null;
+        },
+        attributes: {
+            size() { return queryStateOf(this).list.length; }
+        },
+        methods: {
+            append(name, value) {
+                const state = queryStateOf(this);
+                state.list.push([toUSVString(name), toUSVString(value)]);
+                updateURL(state);
             },
-            set: function(value) {
-                const url = new URL(value);
-                this._protocol = url._protocol;
-                this._username = url._username;
-                this._password = url._password;
-                this._hostname = url._hostname;
-                this._port = url._port;
-                this._pathname = url._pathname;
-                this._search = url._search;
-                this._hash = url._hash;
-                this._searchParams = new URLSearchParams(this._search);
+            delete(name, value = undefined) {
+                const state = queryStateOf(this);
+                const key = toUSVString(name);
+                const expected = value === undefined ? undefined : toUSVString(value);
+                state.list = state.list.filter(([itemName, itemValue]) =>
+                    itemName !== key || (expected !== undefined && itemValue !== expected));
+                updateURL(state);
+            },
+            get(name) {
+                const key = toUSVString(name);
+                const found = queryStateOf(this).list.find(([itemName]) => itemName === key);
+                return found ? found[1] : null;
+            },
+            getAll(name) {
+                const key = toUSVString(name);
+                return queryStateOf(this).list.filter(([itemName]) => itemName === key).map(item => item[1]);
+            },
+            has(name, value = undefined) {
+                const key = toUSVString(name);
+                const expected = value === undefined ? undefined : toUSVString(value);
+                return queryStateOf(this).list.some(([itemName, itemValue]) =>
+                    itemName === key && (expected === undefined || itemValue === expected));
+            },
+            set(name, value) {
+                const state = queryStateOf(this);
+                const key = toUSVString(name);
+                const text = toUSVString(value);
+                const index = state.list.findIndex(([itemName]) => itemName === key);
+                if (index === -1) {
+                    state.list.push([key, text]);
+                } else {
+                    state.list[index] = [key, text];
+                    state.list = state.list.filter(([itemName], position) => position <= index || itemName !== key);
+                }
+                updateURL(state);
+            },
+            sort() {
+                const state = queryStateOf(this);
+                // Array.prototype.sort 是稳定排序，按 UTF-16 码元比较名称
+                state.list.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+                updateURL(state);
+            },
+            toString() {
+                return bridge.serializeQuery(queryStateOf(this).list);
+            },
+            forEach(callback, thisArg = undefined) {
+                if (typeof callback !== 'function') {
+                    throw new TypeError("Failed to execute 'forEach' on 'URLSearchParams': The callback provided as parameter 1 is not a function.");
+                }
+                const state = queryStateOf(this);
+                for (let index = 0; index < state.list.length; index++) {
+                    const [name, value] = state.list[index];
+                    callback.call(thisArg, value, name, this);
+                }
+            },
+            entries() { return createIterator(this, 'entries'); },
+            keys() { return createIterator(this, 'key'); },
+            values() { return createIterator(this, 'value'); }
+        }
+    });
+    // WebIDL：@@iterator 与 entries 是同一个函数，且不可枚举
+    Object.defineProperty(URLSearchParams.prototype, Symbol.iterator, {
+        value: URLSearchParams.prototype.entries, writable: true, enumerable: false, configurable: true
+    });
+
+    // ==================== URL ====================
+    function urlStateOf(url) {
+        return idl.internal(url);
+    }
+
+    function setComponent(url, name, value) {
+        const state = urlStateOf(url);
+        state.record = bridge.update(state.record.href, name, toUSVString(value));
+        queryStateOf(state.query).list = bridge.parseQuery(state.record.search.slice(1));
+    }
+
+    function componentAttribute(name) {
+        return {
+            get() { return urlStateOf(this).record[name]; },
+            set(value) { setComponent(this, name, value); }
+        };
+    }
+
+    function parseWithBase(url, base) {
+        if (base === undefined) return bridge.parse(toUSVString(url));
+        return bridge.parse(toUSVString(url), toUSVString(base));
+    }
+
+    function randomUUID() {
+        const hex = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16));
+        hex[12] = '4';
+        hex[16] = (8 + Math.floor(Math.random() * 4)).toString(16);
+        const text = hex.join('');
+        return `${text.slice(0, 8)}-${text.slice(8, 12)}-${text.slice(12, 16)}-${text.slice(16, 20)}-${text.slice(20)}`;
+    }
+
+    const objectURLs = new Set();
+
+    idl.defineInterface('URL', {
+        length: 1,
+        construct(url, base = undefined) {
+            if (base !== undefined && bridge.parse(toUSVString(base)) === null) {
+                throw new TypeError("Failed to construct 'URL': Invalid base URL");
             }
+            const record = parseWithBase(url, base);
+            if (record === null) throw new TypeError("Failed to construct 'URL': Invalid URL");
+            const state = urlStateOf(this);
+            state.record = record;
+            state.query = idl.create('URLSearchParams', {
+                list: bridge.parseQuery(record.search.slice(1)), url: this
+            });
         },
-        protocol: {
-            get: function() { return this._protocol; },
-            set: function(value) { this._protocol = value.endsWith(':') ? value : value + ':'; }
+        attributes: {
+            href: {
+                get() { return urlStateOf(this).record.href; },
+                set(value) {
+                    const record = bridge.parse(toUSVString(value));
+                    if (record === null) throw new TypeError("Failed to set the 'href' property on 'URL': Invalid URL");
+                    const state = urlStateOf(this);
+                    state.record = record;
+                    queryStateOf(state.query).list = bridge.parseQuery(record.search.slice(1));
+                }
+            },
+            origin() { return urlStateOf(this).record.origin; },
+            protocol: componentAttribute('protocol'),
+            username: componentAttribute('username'),
+            password: componentAttribute('password'),
+            host: componentAttribute('host'),
+            hostname: componentAttribute('hostname'),
+            port: componentAttribute('port'),
+            pathname: componentAttribute('pathname'),
+            search: componentAttribute('search'),
+            searchParams() { return urlStateOf(this).query; },
+            hash: componentAttribute('hash')
         },
-        username: {
-            get: function() { return this._username; },
-            set: function(value) { this._username = value; }
+        methods: {
+            toJSON() { return urlStateOf(this).record.href; },
+            toString() { return urlStateOf(this).record.href; }
         },
-        password: {
-            get: function() { return this._password; },
-            set: function(value) { this._password = value; }
-        },
-        hostname: {
-            get: function() { return this._hostname; },
-            set: function(value) { this._hostname = value; }
-        },
-        port: {
-            get: function() { return this._port; },
-            set: function(value) { this._port = value; }
-        },
-        host: {
-            get: function() { return this._port ? `${this._hostname}:${this._port}` : this._hostname; },
-            set: function(value) {
-                const parts = value.split(':');
-                this._hostname = parts[0];
-                this._port = parts[1] || '';
+        statics: {
+            canParse(url, base = undefined) {
+                if (base !== undefined && bridge.parse(toUSVString(base)) === null) return false;
+                return parseWithBase(url, base) !== null;
+            },
+            createObjectURL(object) {
+                const origin = window.location ? window.location.origin : 'null';
+                const url = `blob:${origin}/${randomUUID()}`;
+                objectURLs.add(url);
+                return url;
+            },
+            revokeObjectURL(url) {
+                objectURLs.delete(String(url));
             }
-        },
-        pathname: {
-            get: function() { return this._pathname; },
-            set: function(value) { this._pathname = value.startsWith('/') ? value : '/' + value; }
-        },
-        search: {
-            get: function() { return this._search; },
-            set: function(value) {
-                this._search = value.startsWith('?') ? value : (value ? '?' + value : '');
-                this._searchParams = new URLSearchParams(this._search);
-            }
-        },
-        hash: {
-            get: function() { return this._hash; },
-            set: function(value) { this._hash = value.startsWith('#') ? value : (value ? '#' + value : ''); }
-        },
-        origin: {
-            get: function() {
-                const port = this._port ? `:${this._port}` : '';
-                return `${this._protocol}//${this._hostname}${port}`;
-            }
-        },
-        searchParams: {
-            get: function() { return this._searchParams; }
         }
     });
 
-    URL.prototype.toString = function() {
-        return this.href;
-    };
-
-    URL.prototype.toJSON = function() {
-        return this.href;
-    };
-
-    // 静态方法
-    URL.createObjectURL = function(object) {
-        return `blob:${window.location?.origin || 'https://example.com'}/${Math.random().toString(36).slice(2)}`;
-    };
-
-    URL.revokeObjectURL = function(url) {
-        // 清理blob URL
-    };
-
-    URL.canParse = function(url, base) {
-        try {
-            new URL(url, base);
-            return true;
-        } catch {
-            return false;
-        }
-    };
-
-    // 挂载到window
-    window.URL = URL;
-    window.URLSearchParams = URLSearchParams;
-    window.webkitURL = URL; // Chrome兼容
+    // Chrome 保留的旧别名
+    idl.exposeGlobal('webkitURL', window.URL);
 })();

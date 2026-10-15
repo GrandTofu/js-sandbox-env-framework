@@ -279,4 +279,18 @@
     window.File = File;
     window.FileReader = FileReader;
     window.FormData = FormData;
+    // 实例不留自有属性（与浏览器一致）
+    for (const name of ['Blob', 'File', 'FileReader', 'FormData']) {
+        const Constructor = window[name];
+        if (typeof Constructor !== 'function' || !Constructor.prototype) continue;
+        const wrapper = function (...args) {
+            const instance = new Constructor(...args);
+            window.__liftOwnProperties__?.(instance);
+            return instance;
+        };
+        Object.defineProperty(wrapper, 'name', { value: name, configurable: true });
+        Object.defineProperty(wrapper, 'prototype', { value: Constructor.prototype });
+        Object.defineProperty(Constructor.prototype, 'constructor', { value: wrapper, writable: true, configurable: true });
+        window[name] = wrapper;
+    }
 })();

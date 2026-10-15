@@ -15,9 +15,9 @@ import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { URL, URLSearchParams } from 'node:url';
+import { URL } from 'node:url';
 import { browserEnvModules } from './server/sandbox/envModules.js';
-import { createHtmlBridge } from './server/sandbox/htmlBridge.js';
+import { createBrowserContext, loadHTMLIntoContext, waitForTimers } from './server/sandbox/browserContext.js';
 import { readHTMLFile, fetchPageHTML } from './server/sandbox/pageSource.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +28,8 @@ let scriptFile = null;
 let codeString = null;
 let envFile = null;
 let timeout = 60000;
+// 脚本结束后继续运行事件循环、等待 setTimeout 执行完的最长时间
+let waitLimit = 1000;
 let enableProxy = false;
 let quietMode = false;
 let profileName = null;
@@ -46,6 +48,8 @@ for (let i = 0; i < args.length; i++) {
         envFile = args[++i];
     } else if (arg === '--timeout' && i + 1 < args.length) {
         timeout = parseInt(args[++i]);
+    } else if (arg === '--wait' && i + 1 < args.length) {
+        waitLimit = parseInt(args[++i]);
     } else if (arg === '--proxy' || arg === '-p') {
         enableProxy = true;
     } else if (arg === '--quiet' || arg === '-q') {
@@ -82,6 +86,7 @@ for (let i = 0; i < args.length; i++) {
   --proxy, -p            启用高级代理监控（记录所有属性访问）
   --quiet, -q            静默模式（减少日志输出）
   --timeout <毫秒>        设置超时时间（默认60000ms）
+  --wait <毫秒>           脚本结束后等待 setTimeout 回调执行完的最长时间（默认1000ms，setInterval 不计入）
   --help, -h             显示帮助信息
 
 示例:
@@ -114,51 +119,39 @@ if (!quietMode) {
     console.log(`🚀 启动沙箱环境...${flagStr}\n`);
 }
 
-// 创建沙箱上下文
-const sandbox = {
-    console: {
-        log: (...args) => {
-            if (!quietMode) console.log('[Sandbox]', ...args);
-            sandbox.__output__.push(['log', ...args]);
-        },
-        error: (...args) => {
-            console.error('[Sandbox]', ...args);
-            sandbox.__output__.push(['error', ...args]);
-        },
-        warn: (...args) => {
-            if (!quietMode) console.warn('[Sandbox]', ...args);
-            sandbox.__output__.push(['warn', ...args]);
-        },
-        info: (...args) => {
-            if (!quietMode) console.info('[Sandbox]', ...args);
-            sandbox.__output__.push(['info', ...args]);
-        }
-    },
-    setTimeout: (fn, delay) => 0,
-    setInterval: (fn, delay) => 0,
-    clearTimeout: (id) => {},
-    clearInterval: (id) => {},
-    atob: (str) => Buffer.from(str, 'base64').toString('binary'),
-    btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
-    URL,
-    URLSearchParams,
-    XMLHttpRequest: class XMLHttpRequest {
-        constructor() { this.bdmsInvokeList = []; }
-        open() {}
-        send() {}
-        setRequestHeader() {}
-    },
-    __output__: []
-};
+// ==================== 读取 Profile ====================
+let profileData = null;
+if (profileName || profileFile) {
+    const profilePath = profileFile ? path.resolve(profileFile) :
+        path.join(__dirname, 'profiles', `${profileName}.json`);
 
-// 添加全局引用
-sandbox.window = sandbox;
-sandbox.global = sandbox;
-sandbox.globalThis = sandbox;
-sandbox.self = sandbox;
+    if (!fs.existsSync(profilePath)) {
+        console.error(`✗ Profile 不存在: ${profilePath}`);
+        process.exit(1);
+    }
 
-// 创建 VM 上下文
-const context = vm.createContext(sandbox);
+    try {
+        profileData = JSON.parse(fs.readFileSync(profilePath, 'utf-8'));
+        if (!quietMode) console.log(`✓ Profile 已加载: ${profileData.meta?.name || profileName || profileFile}`);
+    } catch (e) {
+        console.error(`✗ Profile 解析失败: ${e.message}`);
+        process.exit(1);
+    }
+}
+
+// ==================== 创建 VM 上下文 ====================
+// 脚本的 console 输出：error 总是打印，其余级别在静默模式下只记录
+const output = [];
+const HOST_CONSOLE = { debug: 'log', log: 'log', info: 'info', warn: 'warn', error: 'error' };
+function onConsole(level, args) {
+    if (level === 'error' || !quietMode) console[HOST_CONSOLE[level] || 'log']('[Sandbox]', ...args);
+    output.push([level, ...args]);
+}
+
+const context = createBrowserContext({ profile: profileData, timeout, onConsole });
+
+// 页面里未处理的 Promise 拒绝按浏览器方式输出，不让宿主进程退出
+process.on('unhandledRejection', reason => onConsole('error', ['Uncaught (in promise)', reason]));
 
 // 辅助函数：加载 env 模块到 context
 function loadEnvModule(relativePath) {
@@ -166,7 +159,8 @@ function loadEnvModule(relativePath) {
     if (fs.existsSync(fullPath)) {
         const code = fs.readFileSync(fullPath, 'utf-8');
         try {
-            vm.runInContext(code, context, { timeout });
+            // 默认文件名 evalmachine.<anonymous> 会出现在 error.stack 里，暴露 Node vm
+            vm.runInContext(code, context, { timeout, filename: '<anonymous>' });
         } catch (e) {
             if (!quietMode) console.warn(`  ⚠ ${relativePath}: ${e.message}`);
         }
@@ -175,35 +169,8 @@ function loadEnvModule(relativePath) {
     return false;
 }
 
-loadEnvModule('env/core/applyCollectedEnvironment.js');
-loadEnvModule('env/core/NativeFunction.js');
-
-// ==================== 加载 Profile ====================
-if (profileName || profileFile) {
-    let profilePath;
-    if (profileFile) {
-        profilePath = path.resolve(profileFile);
-    } else {
-        profilePath = path.join(__dirname, 'profiles', `${profileName}.json`);
-    }
-
-    if (!fs.existsSync(profilePath)) {
-        console.error(`✗ Profile 不存在: ${profilePath}`);
-        process.exit(1);
-    }
-
-    try {
-        const profileData = JSON.parse(fs.readFileSync(profilePath, 'utf-8'));
-        sandbox.__profile__ = profileData;
-        if (!quietMode) console.log(`✓ Profile 已加载: ${profileData.meta?.name || profileName || profileFile}`);
-    } catch (e) {
-        console.error(`✗ Profile 解析失败: ${e.message}`);
-        process.exit(1);
-    }
-
-    // 加载 ProfileManager
-    loadEnvModule('env/core/ProfileManager.js');
-}
+// 加载 ProfileManager
+if (profileData) loadEnvModule('env/core/ProfileManager.js');
 
 // Collected snapshots need browser objects to merge into even without --profile.
 if (profileName || profileFile || envFile || htmlFile || htmlURL || pageURL) {
@@ -222,13 +189,13 @@ if (enableProxy) {
 
     if (fs.existsSync(proxyMonitorPath)) {
         const proxyCode = fs.readFileSync(proxyMonitorPath, 'utf-8');
-        vm.runInContext(proxyCode, context);
+        vm.runInContext(proxyCode, context, { filename: '<anonymous>' });
         if (!quietMode) console.log('✓ 代理监控已加载');
     }
 
     if (fs.existsSync(proxyEnvPath)) {
         const envCode = fs.readFileSync(proxyEnvPath, 'utf-8');
-        vm.runInContext(envCode, context);
+        vm.runInContext(envCode, context, { filename: '<anonymous>' });
         if (!quietMode) console.log('✓ 代理环境已加载\n');
     }
 }
@@ -237,13 +204,14 @@ if (enableProxy) {
 if (detectMode) {
     loadEnvModule('env/core/AutoDetector.js');
     try {
-        vm.runInContext('if(window.__AutoDetector__)window.__AutoDetector__.enable()', context);
+        vm.runInContext('if(window.__AutoDetector__)window.__AutoDetector__.enable()', context,
+            { filename: '<anonymous>' });
     } catch (e) {}
     if (!quietMode) console.log('✓ 自动检测模式已启用\n');
 }
 
 // Mark only the browser mocks loaded so far, before executing user supplied code.
-vm.runInContext('window.__markBrowserFunctions__()', context, { timeout });
+vm.runInContext('window.__markBrowserFunctions__()', context, { timeout, filename: '<anonymous>' });
 
 // ==================== 加载环境文件 ====================
 if (envFile) {
@@ -256,9 +224,10 @@ if (envFile) {
             if (envFile.endsWith('.json')) {
                 const envData = JSON.parse(envCode);
                 // Parse again inside the VM so collector data has the same realm as the mocks.
-                vm.runInContext(`window.__applyCollectedEnvironment__(${JSON.stringify(envData)})`, context, { timeout });
+                vm.runInContext(`window.__applyCollectedEnvironment__(${JSON.stringify(envData)})`, context,
+                    { timeout, filename: '<anonymous>' });
             } else {
-                vm.runInContext(envCode, context, { timeout });
+                vm.runInContext(envCode, context, { timeout, filename: '<anonymous>' });
             }
             if (!quietMode) console.log('✓ 环境加载成功\n');
         } else {
@@ -282,17 +251,10 @@ if (htmlFile || htmlURL || pageURL) {
             throw new Error('Page URL must use HTTP or HTTPS');
         }
         if (page.html !== null) {
-            const bridge = createHtmlBridge();
-            Object.defineProperty(context, '__htmlBridge__', { value: bridge, configurable: true });
-            sandbox.__parsedHTML__ = bridge.parseDocument(page.html);
-            try {
-                vm.runInContext(`window.__loadHTML__(window.__parsedHTML__, ${JSON.stringify(targetURL || null)})`,
-                    context, { timeout });
-            } finally {
-                delete sandbox.__parsedHTML__;
-            }
+            loadHTMLIntoContext(context, page.html, targetURL, timeout);
         } else {
-            vm.runInContext(`window.location.href = ${JSON.stringify(targetURL)}`, context, { timeout });
+            vm.runInContext(`window.location.href = ${JSON.stringify(targetURL)}`, context,
+                { timeout, filename: '<anonymous>' });
         }
         if (!quietMode) console.log(`✓ 页面环境已加载: ${targetURL || '本地 HTML'}\n`);
     } catch (error) {
@@ -333,20 +295,13 @@ const startTime = Date.now();
 let result;
 let error = null;
 
-const accessLog = [];
-const callLog = [];
-
-sandbox.__logAccess__ = (p, type) => {
-    accessLog.push({ path: p, type, time: Date.now() - startTime });
-};
-sandbox.__logCall__ = (p, argTypes) => {
-    callLog.push({ path: p, argTypes, time: Date.now() - startTime });
-};
-
 try {
-    sandbox.__output__ = [];
+    // 只汇总目标脚本自身的输出
+    output.length = 0;
 
     result = vm.runInContext(code, context, {
+        // 默认文件名 evalmachine.<anonymous> 会出现在 error.stack 里，暴露 Node vm
+        filename: '<anonymous>',
         timeout: timeout,
         displayErrors: true
     });
@@ -369,9 +324,10 @@ try {
         await Promise.resolve();
     }
 
-    const output = sandbox.__output__;
+    // 像浏览器一样继续运行事件循环，直到页面的 setTimeout 都执行完或达到 --wait 上限
+    await waitForTimers(context, waitLimit);
 
-    if (output && output.length > 0 && !quietMode) {
+    if (output.length > 0 && !quietMode) {
         console.log('📋 控制台输出:');
         output.forEach(([type, ...args]) => {
             const prefix = type === 'error' ? '❌' : type === 'warn' ? '⚠️' : type === 'info' ? 'ℹ️' : '  ';
@@ -390,27 +346,6 @@ try {
             }
         } else {
             console.log(result);
-        }
-        console.log();
-    }
-
-    if ((accessLog.length > 0 || callLog.length > 0) && !quietMode) {
-        console.log('📊 执行统计:');
-        console.log(`   属性访问: ${accessLog.length} 次`);
-        console.log(`   方法调用: ${callLog.length} 次`);
-
-        if (accessLog.length > 0) {
-            console.log('\n   最近访问的属性:');
-            accessLog.slice(0, 5).forEach(log => {
-                console.log(`   - ${log.path} (${log.type}) @${log.time}ms`);
-            });
-        }
-
-        if (callLog.length > 0) {
-            console.log('\n   最近调用的方法:');
-            callLog.slice(0, 5).forEach(log => {
-                console.log(`   - ${log.path} @${log.time}ms`);
-            });
         }
         console.log();
     }

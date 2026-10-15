@@ -8,7 +8,7 @@ import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { URL, URLSearchParams } from 'node:url';
+import { createBrowserContext } from './server/sandbox/browserContext.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -84,81 +84,54 @@ if (fs.existsSync(proxyEnvPath)) {
 // 创建沙箱
 console.log('🚀 启动高级代理监控环境...\n');
 
-const sandbox = {
-    console: {
-        log: (...args) => !quietMode && console.log('[Sandbox]', ...args),
-        error: (...args) => console.error('[Sandbox]', ...args),
-        warn: (...args) => !quietMode && console.warn('[Sandbox]', ...args),
-        info: (...args) => !quietMode && console.info('[Sandbox]', ...args)
-    },
-    setTimeout: (fn, delay) => 0,
-    setInterval: (fn, delay) => 0,
-    clearTimeout: (id) => {},
-    clearInterval: (id) => {},
-    atob: (str) => Buffer.from(str, 'base64').toString('binary'),
-    btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
-    URL,
-    URLSearchParams,
-    XMLHttpRequest: class XMLHttpRequest {
-        constructor() {
-            this.bdmsInvokeList = [];
-        }
-        open() {}
-        send() {}
-        setRequestHeader() {}
-    }
-};
-
-sandbox.window = sandbox;
-sandbox.global = sandbox;
-sandbox.globalThis = sandbox;
-sandbox.self = sandbox;
-
-const context = vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(__dirname, 'env/core/NativeFunction.js'), 'utf-8'), context);
-
-// 加载 Profile
+// 读取 Profile
+let profileData = null;
 if (profileName || profileFile) {
-    let profilePath;
-    if (profileFile) {
-        profilePath = path.resolve(profileFile);
-    } else {
-        profilePath = path.join(__dirname, 'profiles', `${profileName}.json`);
-    }
+    const profilePath = profileFile ? path.resolve(profileFile) :
+        path.join(__dirname, 'profiles', `${profileName}.json`);
 
-    if (fs.existsSync(profilePath)) {
-        try {
-            const profileData = JSON.parse(fs.readFileSync(profilePath, 'utf-8'));
-            sandbox.__profile__ = profileData;
-            if (!quietMode) console.log(`✓ Profile 已加载: ${profileData.meta?.name || profileName || profileFile}`);
-        } catch (e) {
-            console.error(`✗ Profile 解析失败: ${e.message}`);
-            process.exit(1);
-        }
-    } else {
+    if (!fs.existsSync(profilePath)) {
         console.error(`✗ Profile 不存在: ${profilePath}`);
         process.exit(1);
     }
+    try {
+        profileData = JSON.parse(fs.readFileSync(profilePath, 'utf-8'));
+        if (!quietMode) console.log(`✓ Profile 已加载: ${profileData.meta?.name || profileName || profileFile}`);
+    } catch (e) {
+        console.error(`✗ Profile 解析失败: ${e.message}`);
+        process.exit(1);
+    }
+}
 
+// 脚本的 console 输出：error 总是打印，其余级别在静默模式下不打印
+const HOST_CONSOLE = { debug: 'log', log: 'log', info: 'info', warn: 'warn', error: 'error' };
+const context = createBrowserContext({
+    profile: profileData,
+    onConsole(level, args) {
+        if (level === 'error' || !quietMode) console[HOST_CONSOLE[level] || 'log']('[Sandbox]', ...args);
+    }
+});
+
+if (profileData) {
     // 加载 ProfileManager
     const pmPath = path.join(__dirname, 'env/core/ProfileManager.js');
     if (fs.existsSync(pmPath)) {
-        vm.runInContext(fs.readFileSync(pmPath, 'utf-8'), context);
+        vm.runInContext(fs.readFileSync(pmPath, 'utf-8'), context, { filename: '<anonymous>' });
     }
 }
 
 // 加载代理监控
 console.log('📦 加载代理监控模块...');
 if (proxyMonitorCode) {
-    vm.runInContext(proxyMonitorCode, context);
+    vm.runInContext(proxyMonitorCode, context, { filename: '<anonymous>' });
     console.log('✓ ProxyMonitor 已加载');
 }
 
 if (proxyEnvCode) {
-    vm.runInContext(proxyEnvCode, context);
+    vm.runInContext(proxyEnvCode, context, { filename: '<anonymous>' });
     console.log('✓ ProxyEnv 已加载');
 }
-vm.runInContext('window.__markBrowserFunctions__()', context);
+vm.runInContext('window.__markBrowserFunctions__()', context, { filename: '<anonymous>' });
 
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 console.log(`执行: ${scriptFile}`);
@@ -171,6 +144,8 @@ let error = null;
 
 try {
     result = vm.runInContext(code, context, {
+        // 默认文件名 evalmachine.<anonymous> 会出现在 error.stack 里，暴露 Node vm
+        filename: '<anonymous>',
         timeout: 60000,
         displayErrors: true
     });

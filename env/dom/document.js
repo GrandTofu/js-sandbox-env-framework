@@ -36,7 +36,8 @@
         this._element = element;
         this._styles = {};
         this._importantStyles = {};
-        
+        window.__elementProps__?.lift(this);
+
         return new Proxy(this, {
             get: function(target, prop) {
                 if (typeof prop === 'symbol') return target[prop];
@@ -59,7 +60,7 @@
                 target._syncAttribute();
                 
                 Monitor.log('Style', 'setStyle', {
-                    elementId: target._element?.__id__,
+                    elementId: nodeIdOf(target._element),
                     tagName: target._element?.tagName,
                     property: prop,
                     value: value
@@ -73,7 +74,12 @@
         _syncAttribute: function() {
             if (!this._element?.attributes) return;
             const value = this.cssText;
-            this._element._attrValues.style = value;
+            const styleState = treeOf(this._element);
+            const oldStyle = styleState.attrValues.style ?? null;
+            styleState.attrValues.style = value;
+            if (!styleRecordSuppressed && oldStyle !== value) {
+                notifyMutation('attributes', this._element, { attributeName: 'style', oldValue: oldStyle });
+            }
             this._element.attributes.setNamedItem(new Attr('style', value, this._element));
         },
         getPropertyValue: function(prop) { return this._styles[prop] || ''; },
@@ -82,7 +88,7 @@
             if (priority === 'important') this._importantStyles[prop] = true;
             this._syncAttribute();
             Monitor.log('Style', 'setProperty', {
-                elementId: this._element?.__id__,
+                elementId: nodeIdOf(this._element),
                 property: prop,
                 value: value,
                 priority: priority
@@ -130,14 +136,18 @@
     function DOMTokenList(element, attrName) {
         this._element = element;
         this._attrName = attrName;
-        this._tokens = [];
+        const values = (nodeStates.get(element) || {}).attrValues;
+        const initial = values && attrName ? values[attrName] : null;
+        this._tokens = initial ? String(initial).split(/\s+/).filter(Boolean) : [];
+        window.__elementProps__?.lift(this);
     }
     
     DOMTokenList.prototype = {
         _update: function() {
-            if (this._element && this._attrName === 'class') {
-                this._element.className = this._tokens.join(' ');
-            }
+            if (!this._element || !this._attrName) return;
+            const value = this._tokens.join(' ');
+            if (this._attrName === 'class') this._element.className = value;
+            else this._element.setAttribute(this._attrName, value);
         },
         add: function(...tokens) {
             tokens.forEach(token => {
@@ -147,7 +157,7 @@
             });
             this._update();
             Monitor.log('Element', 'classList.add', {
-                elementId: this._element?.__id__,
+                elementId: nodeIdOf(this._element),
                 tagName: this._element?.tagName,
                 tokens: tokens
             });
@@ -159,7 +169,7 @@
             });
             this._update();
             Monitor.log('Element', 'classList.remove', {
-                elementId: this._element?.__id__,
+                elementId: nodeIdOf(this._element),
                 tagName: this._element?.tagName,
                 tokens: tokens
             });
@@ -291,6 +301,24 @@
         });
     }
     
+    // ==================== 接口对象导出 ====================
+    // elements.js 复用同一个 DOMTokenList 类（window.DOMTokenList 是不可构造的接口对象）
+    Object.defineProperty(window, '__domTokenListClass__', { value: DOMTokenList, configurable: true });
+    // cssom.js 复用同一个 CSSStyleDeclaration 类（window.CSSStyleDeclaration 是不可构造的接口对象）
+    Object.defineProperty(window, '__cssStyleDeclarationClass__', { value: CSSStyleDeclaration, configurable: true });
+    // 这些接口在浏览器里存在但不可直接构造
+    for (const [name, Constructor] of [['CSSStyleDeclaration', CSSStyleDeclaration],
+        ['DOMTokenList', DOMTokenList], ['NamedNodeMap', NamedNodeMap],
+        ['DOMStringMap', DOMStringMap]]) {
+        Object.defineProperty(Constructor.prototype, Symbol.toStringTag, { value: name, configurable: true });
+        const Interface = function () { throw new TypeError('Illegal constructor'); };
+        Object.defineProperty(Interface, 'name', { value: name, configurable: true });
+        Object.defineProperty(Interface, 'prototype', { value: Constructor.prototype });
+        Object.defineProperty(Constructor.prototype, 'constructor',
+            { value: Interface, writable: true, configurable: true });
+        window[name] = Interface;
+    }
+
     // ==================== DOMRect ====================
     function DOMRect(x, y, width, height) {
         this.x = x || 0;
@@ -301,24 +329,103 @@
         this.left = this.x;
         this.right = this.x + this.width;
         this.bottom = this.y + this.height;
+        // 与浏览器一致：实例上没有自有属性（值存在原型访问器背后）
+        window.__elementProps__?.lift(this);
     }
+    Object.defineProperty(DOMRect.prototype, Symbol.toStringTag, { value: 'DOMRect', configurable: true });
     window.DOMRect = DOMRect;
     
+    // ==================== 节点树内部状态 ====================
+    // nodeType、parentNode、childNodes 等在 Chrome 中是原型上的只读 getter；
+    // 树关系存放在这里，本文件经 treeOf() 读写，脚本只能通过原型 getter 读取
+    const nodeStates = new WeakMap();
+
+    function initNodeState(node, nodeType, nodeName) {
+        const state = {
+            id: generateElementId(),
+            nodeType, nodeName, parent: null, childNodes: [], ownerDocument: null, connected: false,
+            first: null, last: null, prev: null, next: null,
+            children: [], firstElement: null, lastElement: null, prevElement: null, nextElement: null
+        };
+        nodeStates.set(node, state);
+        return state;
+    }
+
+    // 节点 id 只供监控日志使用，不出现在节点对象上
+    function nodeIdOf(node) {
+        return nodeStates.get(node)?.id;
+    }
+    Object.defineProperty(window, '__nodeIdOf__', {
+        value: window.safefunction(nodeIdOf, 'nodeIdOf'), configurable: true
+    });
+
+    function treeOf(node) {
+        const state = nodeStates.get(node);
+        if (!state) throw new TypeError('Illegal invocation');
+        return state;
+    }
+
+    // MutationObserver：变更经 observerApis.js 的内部队列投递
+    var styleRecordSuppressed = false;
+    function notifyMutation(type, target, fields) {
+        const mutations = window.__mutationQueue__;
+        if (mutations) mutations.queue(type, target, fields);
+    }
+
+    function setCharacterData(state, value, node) {
+        const oldValue = state.data;
+        state.data = value === null ? '' : String(value);
+        notifyMutation('characterData', node, { oldValue });
+    }
+
+    // 挂到新的父节点下；调用方负责放进 childNodes 并刷新兄弟引用
+    function adopt(child, parent) {
+        const state = treeOf(child);
+        state.parent = parent;
+        state.ownerDocument = treeOf(parent).ownerDocument;
+    }
+
+    // 值为读取函数，或 { get, set }；set(state, value, node) 用于 Chrome 中可赋值的属性
+    function defineTreeGetters(prototype, getters) {
+        for (const [key, spec] of Object.entries(getters)) {
+            const read = typeof spec === 'function' ? spec : spec.get;
+            const write = typeof spec === 'function' ? null : spec.set;
+            const holder = {
+                get [key]() { return read(treeOf(this)); },
+                set [key](value) { write(treeOf(this), value, this); }
+            };
+            const descriptor = Object.getOwnPropertyDescriptor(holder, key);
+            Object.defineProperty(prototype, key, {
+                get: window.safefunction(descriptor.get, 'get ' + key),
+                set: write ? window.safefunction(descriptor.set, 'set ' + key) : undefined,
+                enumerable: true, configurable: true
+            });
+        }
+    }
+
+    const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
+    const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+    // Element 自身的数据（标签名、属性集合、样式等）放进节点内部状态
+    function initElementState(element, tagName, namespaceURI) {
+        const name = String(tagName);
+        Object.assign(treeOf(element), {
+            tagName: name.toUpperCase(), localName: name.toLowerCase(), nodeName: name.toUpperCase(),
+            namespaceURI: namespaceURI || HTML_NAMESPACE, prefix: null,
+            attrValues: {},
+            attributes: new NamedNodeMap(element),
+            style: new CSSStyleDeclaration(element),
+            classList: new DOMTokenList(element, 'class'),
+            dataset: new DOMStringMap(element),
+            scrollTop: 0, scrollLeft: 0
+        });
+    }
+
     // ==================== Node 基类 ====================
     function Node() {
-        this.__id__ = generateElementId();
-        this.nodeType = 1;
-        this.nodeName = '';
-        this.nodeValue = null;
-        this.childNodes = [];
-        this.parentNode = null;
-        this.parentElement = null;
-        this.firstChild = null;
-        this.lastChild = null;
-        this.previousSibling = null;
-        this.nextSibling = null;
-        this.ownerDocument = null;
-        this.isConnected = false;
+        // 登记 EventTarget 身份：事件方法来自 EventTarget.prototype（eventCore.js）
+        window.__webidl__.brand(this, 'EventTarget');
+        initNodeState(this, 1, '');
     }
     
     Node.prototype = {
@@ -338,17 +445,16 @@
                 throw new DOMException('The node cannot be inserted here.', 'HierarchyRequestError');
             }
             if (child.parentNode) child.parentNode.removeChild(child);
-            child.parentNode = this;
-            child.parentElement = this.nodeType === 1 ? this : null;
-            child.ownerDocument = this.ownerDocument;
+            adopt(child, this);
             this.childNodes.push(child);
             this._updateChildReferences();
             child._setConnected(this.nodeType === 9 || this.isConnected);
+            notifyMutation('childList', this, { addedNodes: [child], previousSibling: child.previousSibling, nextSibling: null });
             
             Monitor.log('DOM', 'appendChild', {
-                parentId: this.__id__,
+                parentId: nodeIdOf(this),
                 parentTag: this.tagName || this.nodeName,
-                childId: child.__id__,
+                childId: nodeIdOf(child),
                 childTag: child.tagName || child.nodeName
             });
             return child;
@@ -359,15 +465,17 @@
             if (idx === -1) {
                 throw new DOMException("Failed to execute 'removeChild': The node to be removed is not a child of this node.", 'NotFoundError');
             }
+            const removedPrevious = child.previousSibling;
+            const removedNext = child.nextSibling;
             this.childNodes.splice(idx, 1);
-            child.parentNode = null;
-            child.parentElement = null;
+            treeOf(child).parent = null;
             child._setConnected(false);
             this._updateChildReferences();
+            notifyMutation('childList', this, { removedNodes: [child], previousSibling: removedPrevious, nextSibling: removedNext });
             
             Monitor.log('DOM', 'removeChild', {
-                parentId: this.__id__,
-                childId: child.__id__
+                parentId: nodeIdOf(this),
+                childId: nodeIdOf(child)
             });
             return child;
         },
@@ -383,17 +491,16 @@
                 throw new DOMException("Failed to execute 'insertBefore': reference node is not a child.", 'NotFoundError');
             }
             if (newNode.parentNode) newNode.parentNode.removeChild(newNode);
-            newNode.parentNode = this;
-            newNode.parentElement = this.nodeType === 1 ? this : null;
-            newNode.ownerDocument = this.ownerDocument;
+            adopt(newNode, this);
             this.childNodes.splice(idx, 0, newNode);
             this._updateChildReferences();
             newNode._setConnected(this.nodeType === 9 || this.isConnected);
+            notifyMutation('childList', this, { addedNodes: [newNode], previousSibling: newNode.previousSibling, nextSibling: referenceNode });
             
             Monitor.log('DOM', 'insertBefore', {
-                parentId: this.__id__,
-                newNodeId: newNode.__id__,
-                referenceId: referenceNode.__id__
+                parentId: nodeIdOf(this),
+                newNodeId: nodeIdOf(newNode),
+                referenceId: nodeIdOf(referenceNode)
             });
             return newNode;
         },
@@ -408,33 +515,40 @@
                 throw new DOMException("Failed to execute 'replaceChild': old child is not a child.", 'NotFoundError');
             }
             if (newChild.parentNode) newChild.parentNode.removeChild(newChild);
-            newChild.parentNode = this;
-            newChild.parentElement = this.nodeType === 1 ? this : null;
-            newChild.ownerDocument = this.ownerDocument;
+            adopt(newChild, this);
             this.childNodes[idx] = newChild;
-            oldChild.parentNode = null;
-            oldChild.parentElement = null;
+            treeOf(oldChild).parent = null;
             this._updateChildReferences();
             oldChild._setConnected(false);
             newChild._setConnected(this.nodeType === 9 || this.isConnected);
+            notifyMutation('childList', this, { addedNodes: [newChild], removedNodes: [oldChild], previousSibling: newChild.previousSibling, nextSibling: newChild.nextSibling });
             
             Monitor.log('DOM', 'replaceChild', {
-                parentId: this.__id__,
-                newChildId: newChild.__id__,
-                oldChildId: oldChild.__id__
+                parentId: nodeIdOf(this),
+                newChildId: nodeIdOf(newChild),
+                oldChildId: nodeIdOf(oldChild)
             });
             return oldChild;
         },
         
         cloneNode: function(deep) {
-            Monitor.log('DOM', 'cloneNode', { elementId: this.__id__, deep });
+            Monitor.log('DOM', 'cloneNode', { elementId: nodeIdOf(this), deep });
             const clone = Object.create(Object.getPrototypeOf(this));
             Object.assign(clone, this);
-            clone.__id__ = generateElementId();
-            clone.childNodes = [];
-            clone.parentNode = null;
-            clone.parentElement = null;
-            
+            // 元素的自有属性已提升到原型，值存在每实例状态里，克隆时一并复制
+            window.__elementProps__?.copy(this, clone);
+            // 树关系不在自有属性里，克隆体单独建立内部状态
+            const source = treeOf(this);
+            window.__webidl__.brand(clone, 'EventTarget');
+            const cloneState = initNodeState(clone, source.nodeType, source.nodeName);
+            cloneState.ownerDocument = source.ownerDocument;
+            // 元素的属性集合、样式、classList 要新建，否则会和原元素共用
+            if (source.tagName) {
+                initElementState(clone, source.localName, source.namespaceURI);
+                Object.assign(cloneState, { tagName: source.tagName, nodeName: source.nodeName });
+                for (const name of Object.keys(source.attrValues)) clone.setAttribute(name, source.attrValues[name]);
+            }
+
             if (deep && this.childNodes.length) {
                 this.childNodes.forEach(child => {
                     if (child.cloneNode) {
@@ -468,76 +582,83 @@
         isSameNode: function(other) { return this === other; },
         
         _updateChildReferences: function() {
-            this.firstChild = this.childNodes[0] || null;
-            this.lastChild = this.childNodes[this.childNodes.length - 1] || null;
+            const state = treeOf(this);
+            state.first = state.childNodes[0] || null;
+            state.last = state.childNodes[state.childNodes.length - 1] || null;
             
             for (let i = 0; i < this.childNodes.length; i++) {
-                const node = this.childNodes[i];
-                node.previousSibling = this.childNodes[i - 1] || null;
-                node.nextSibling = this.childNodes[i + 1] || null;
+                const nodeState = treeOf(state.childNodes[i]);
+                nodeState.prev = state.childNodes[i - 1] || null;
+                nodeState.next = state.childNodes[i + 1] || null;
             }
         },
         _setConnected: function(value) {
-            this.isConnected = value;
+            treeOf(this).connected = value;
             for (const child of this.childNodes) child._setConnected(value);
         }
     };
-    
+    // Node 继承 EventTarget：addEventListener / removeEventListener / dispatchEvent 由 eventCore.js 提供
+    Object.setPrototypeOf(Node.prototype, window.EventTarget.prototype);
+    Object.setPrototypeOf(Node, window.EventTarget);
+    // Node.prototype 是对象字面量，没有自己的 constructor，会继承到 EventTarget
+    Object.defineProperty(Node.prototype, 'constructor', {
+        value: Node, writable: true, enumerable: false, configurable: true
+    });
+    defineTreeGetters(Node.prototype, {
+        nodeType: s => s.nodeType,
+        nodeName: s => s.nodeName,
+        isConnected: s => s.connected,
+        ownerDocument: s => s.ownerDocument,
+        parentNode: s => s.parent,
+        parentElement: s => (s.parent && nodeStates.get(s.parent)?.nodeType === 1 ? s.parent : null),
+        childNodes: s => s.childNodes,
+        firstChild: s => s.first,
+        lastChild: s => s.last,
+        previousSibling: s => s.prev,
+        nextSibling: s => s.next
+    });
+
     // ==================== Element 基类 ====================
     function Element(tagName, namespaceURI) {
         Node.call(this);
-        this.tagName = tagName.toUpperCase();
-        this.localName = tagName.toLowerCase();
-        this.nodeName = this.tagName;
-        this.nodeType = 1;
-        this.namespaceURI = namespaceURI || 'http://www.w3.org/1999/xhtml';
-        this.prefix = null;
-        
-        // 子元素相关
-        this.children = [];
-        this.firstElementChild = null;
-        this.lastElementChild = null;
-        this.childElementCount = 0;
-        this.previousElementSibling = null;
-        this.nextElementSibling = null;
-        
-        // 属性
-        this.attributes = new NamedNodeMap(this);
-        this._attrValues = {};
-        
-        // 样式和类
-        this.style = new CSSStyleDeclaration(this);
-        this.classList = new DOMTokenList(this, 'class');
-        this.dataset = new DOMStringMap(this);
-        
-        // 常用属性
-        // Attributes and markup are reflected by accessors on Element.prototype.
-        // A layout engine is unavailable, so visible text uses the DOM text.
-        
-        // 事件
-        this._eventListeners = {};
-        
-        // 尺寸
-        this.scrollTop = 0;
-        this.scrollLeft = 0;
-        this.scrollWidth = 0;
-        this.scrollHeight = 0;
-        this.clientTop = 0;
-        this.clientLeft = 0;
-        this.clientWidth = 0;
-        this.clientHeight = 0;
-        this.offsetTop = 0;
-        this.offsetLeft = 0;
-        this.offsetWidth = 0;
-        this.offsetHeight = 0;
-        this.offsetParent = null;
-        
+        // tagName、attributes、style、classList 等由原型 getter 从内部状态读取
+        initElementState(this, tagName, namespaceURI);
+
         // 存储
-        __createdElements__.set(this.__id__, this);
+        __createdElements__.set(nodeIdOf(this), this);
     }
     
     Element.prototype = Object.create(Node.prototype);
     Element.prototype.constructor = Element;
+    const parentNodeGetters = {
+        children: s => s.children,
+        firstElementChild: s => s.firstElement,
+        lastElementChild: s => s.lastElement,
+        childElementCount: s => s.children.length
+    };
+    defineTreeGetters(Element.prototype, parentNodeGetters);
+    defineTreeGetters(Element.prototype, {
+        previousElementSibling: s => s.prevElement,
+        nextElementSibling: s => s.nextElement
+    });
+    // 没有布局引擎：尺寸类属性固定为 0，scrollTop / scrollLeft 可赋值
+    defineTreeGetters(Element.prototype, {
+        namespaceURI: s => s.namespaceURI,
+        prefix: s => s.prefix,
+        localName: s => s.localName,
+        tagName: s => s.tagName,
+        attributes: s => s.attributes,
+        // [PutForwards=value]：赋值转写到 class 属性
+        classList: { get: s => s.classList, set: (s, value, node) => node.setAttribute('class', String(value)) },
+        scrollTop: { get: s => s.scrollTop, set: (s, value) => { s.scrollTop = Number(value) || 0; } },
+        scrollLeft: { get: s => s.scrollLeft, set: (s, value) => { s.scrollLeft = Number(value) || 0; } },
+        scrollWidth: () => 0,
+        scrollHeight: () => 0,
+        clientTop: () => 0,
+        clientLeft: () => 0,
+        clientWidth: () => 0,
+        clientHeight: () => 0
+    });
 
     function NodeList() { throw new TypeError('Illegal constructor'); }
     Object.defineProperty(NodeList.prototype, Symbol.toStringTag, { value: 'NodeList' });
@@ -627,11 +748,11 @@
     }
     Object.defineProperties(Element.prototype, {
         id: {
-            get() { return this._attrValues.id || ''; },
+            get() { return treeOf(this).attrValues.id || ''; },
             set(value) { this.setAttribute('id', value); }, configurable: true, enumerable: true
         },
         className: {
-            get() { return this._attrValues.class || ''; },
+            get() { return treeOf(this).attrValues.class || ''; },
             set(value) { this.setAttribute('class', value); }, configurable: true, enumerable: true
         },
         textContent: {
@@ -689,8 +810,10 @@
     }
 
     function reflectURL(element, property, attribute) {
+        const prototype = Object.getPrototypeOf(element);
         delete element[property];
-        Object.defineProperty(element, property, {
+        // 与浏览器一致：URL 反射属性定义在原型上，实例不留自有属性（覆盖构造时提升的同名访问器）
+        Object.defineProperty(prototype, property, {
             configurable: true, enumerable: true,
             get() {
                 const raw = this.getAttribute(attribute);
@@ -703,26 +826,32 @@
     // 属性操作
     Element.prototype.getAttribute = function(name) {
         Monitor.log('Attribute', 'getAttribute', {
-            elementId: this.__id__,
+            elementId: nodeIdOf(this),
             tagName: this.tagName,
             name: name,
-            value: this._attrValues[name]
+            value: treeOf(this).attrValues[name]
         });
-        return this._attrValues[name] !== undefined ? this._attrValues[name] : null;
+        return treeOf(this).attrValues[name] !== undefined ? treeOf(this).attrValues[name] : null;
     };
     
     Element.prototype.setAttribute = function(name, value) {
         const strValue = String(value);
-        this._attrValues[name] = strValue;
+        const oldValue = treeOf(this).attrValues[name] ?? null;
+        treeOf(this).attrValues[name] = strValue;
         this.attributes.setNamedItem(new Attr(name, strValue, this));
         
         if (name === 'class') {
             this.classList._tokens = strValue.split(/\s+/).filter(Boolean);
         }
-        if (name === 'style') this.style.cssText = strValue;
+        if (name === 'style') {
+            // cssText 会回写 style 属性，这次变更已由 setAttribute 自己上报
+            styleRecordSuppressed = true;
+            try { this.style.cssText = strValue; } finally { styleRecordSuppressed = false; }
+        }
+        notifyMutation('attributes', this, { attributeName: name, oldValue });
         
         Monitor.log('Attribute', 'setAttribute', {
-            elementId: this.__id__,
+            elementId: nodeIdOf(this),
             tagName: this.tagName,
             name: name,
             value: strValue
@@ -730,7 +859,9 @@
     };
     
     Element.prototype.removeAttribute = function(name) {
-        delete this._attrValues[name];
+        const existed = name in treeOf(this).attrValues;
+        const oldValue = existed ? treeOf(this).attrValues[name] : null;
+        delete treeOf(this).attrValues[name];
         this.attributes.removeNamedItem(name);
         if (name === 'class') this.classList._tokens = [];
         if (name === 'style') {
@@ -738,16 +869,18 @@
             this.style._importantStyles = {};
         }
         
+        if (existed) notifyMutation('attributes', this, { attributeName: name, oldValue });
+        
         Monitor.log('Attribute', 'removeAttribute', {
-            elementId: this.__id__,
+            elementId: nodeIdOf(this),
             tagName: this.tagName,
             name: name
         });
     };
     
-    Element.prototype.hasAttribute = function(name) { return name in this._attrValues; };
-    Element.prototype.hasAttributes = function() { return Object.keys(this._attrValues).length > 0; };
-    Element.prototype.getAttributeNames = function() { return Object.keys(this._attrValues); };
+    Element.prototype.hasAttribute = function(name) { return name in treeOf(this).attrValues; };
+    Element.prototype.hasAttributes = function() { return Object.keys(treeOf(this).attrValues).length > 0; };
+    Element.prototype.getAttributeNames = function() { return Object.keys(treeOf(this).attrValues); };
     Element.prototype.toggleAttribute = function(name, force) {
         if (force !== undefined) {
             if (force) { this.setAttribute(name, ''); return true; }
@@ -760,14 +893,16 @@
     // 子元素更新
     Element.prototype._updateChildReferences = function() {
         Node.prototype._updateChildReferences.call(this);
-        this.children = this.childNodes.filter(n => n.nodeType === 1);
-        this.childElementCount = this.children.length;
-        this.firstElementChild = this.children[0] || null;
-        this.lastElementChild = this.children[this.children.length - 1] || null;
-        
-        for (let i = 0; i < this.children.length; i++) {
-            this.children[i].previousElementSibling = this.children[i - 1] || null;
-            this.children[i].nextElementSibling = this.children[i + 1] || null;
+        const state = treeOf(this);
+        const elements = state.childNodes.filter(n => n.nodeType === 1);
+        state.children = elements;
+        state.firstElement = elements[0] || null;
+        state.lastElement = elements[elements.length - 1] || null;
+
+        for (let i = 0; i < elements.length; i++) {
+            const elementState = treeOf(elements[i]);
+            elementState.prevElement = elements[i - 1] || null;
+            elementState.nextElement = elements[i + 1] || null;
         }
     };
     
@@ -842,7 +977,7 @@
     
     // 查询
     Element.prototype.querySelector = function(selector) {
-        Monitor.log('DOM', 'querySelector', { elementId: this.__id__, selector });
+        Monitor.log('DOM', 'querySelector', { elementId: nodeIdOf(this), selector });
         
         const mock = Monitor.executeMock('element.querySelector', [selector], this);
         if (mock.mocked) return mock.result;
@@ -851,7 +986,7 @@
     };
     
     Element.prototype.querySelectorAll = function(selector) {
-        Monitor.log('DOM', 'querySelectorAll', { elementId: this.__id__, selector });
+        Monitor.log('DOM', 'querySelectorAll', { elementId: nodeIdOf(this), selector });
         
         const mock = Monitor.executeMock('element.querySelectorAll', [selector], this);
         if (mock.mocked) return mock.result;
@@ -860,17 +995,17 @@
     };
     
     Element.prototype.getElementsByTagName = function(tagName) {
-        Monitor.log('DOM', 'getElementsByTagName', { elementId: this.__id__, tagName });
+        Monitor.log('DOM', 'getElementsByTagName', { elementId: nodeIdOf(this), tagName });
         return liveCollection(() => window.__htmlBridge__?.select(this, String(tagName)) || []);
     };
     
     Element.prototype.getElementsByClassName = function(className) {
-        Monitor.log('DOM', 'getElementsByClassName', { elementId: this.__id__, className });
+        Monitor.log('DOM', 'getElementsByClassName', { elementId: nodeIdOf(this), className });
         return liveCollection(() => findElements(this, node => hasClasses(node, className)));
     };
     
     Element.prototype.closest = function(selector) {
-        Monitor.log('DOM', 'closest', { elementId: this.__id__, selector });
+        Monitor.log('DOM', 'closest', { elementId: nodeIdOf(this), selector });
         for (let node = this; node?.nodeType === 1; node = node.parentElement) {
             if (node.matches(selector)) return node;
         }
@@ -878,13 +1013,13 @@
     };
     
     Element.prototype.matches = function(selector) {
-        Monitor.log('DOM', 'matches', { elementId: this.__id__, selector });
+        Monitor.log('DOM', 'matches', { elementId: nodeIdOf(this), selector });
         return window.__htmlBridge__?.matches(this, selector) || false;
     };
     
     // 几何相关
     Element.prototype.getBoundingClientRect = function() {
-        Monitor.log('DOM', 'getBoundingClientRect', { elementId: this.__id__ });
+        Monitor.log('DOM', 'getBoundingClientRect', { elementId: nodeIdOf(this) });
         
         const mock = Monitor.executeMock('element.getBoundingClientRect', [], this);
         if (mock.mocked) return mock.result;
@@ -893,12 +1028,12 @@
     };
     
     Element.prototype.getClientRects = function() {
-        Monitor.log('DOM', 'getClientRects', { elementId: this.__id__ });
+        Monitor.log('DOM', 'getClientRects', { elementId: nodeIdOf(this) });
         return [this.getBoundingClientRect()];
     };
     
     Element.prototype.scrollIntoView = function(options) {
-        Monitor.log('DOM', 'scrollIntoView', { elementId: this.__id__, options });
+        Monitor.log('DOM', 'scrollIntoView', { elementId: nodeIdOf(this), options });
     };
     
     Element.prototype.scroll = function(x, y) { this.scrollTop = y; this.scrollLeft = x; };
@@ -907,66 +1042,21 @@
     
     // 焦点
     Element.prototype.focus = function(options) {
-        Monitor.log('DOM', 'focus', { elementId: this.__id__ });
+        Monitor.log('DOM', 'focus', { elementId: nodeIdOf(this) });
     };
     Element.prototype.blur = function() {
-        Monitor.log('DOM', 'blur', { elementId: this.__id__ });
+        Monitor.log('DOM', 'blur', { elementId: nodeIdOf(this) });
     };
     Element.prototype.click = function() {
-        Monitor.log('DOM', 'click', { elementId: this.__id__ });
+        Monitor.log('DOM', 'click', { elementId: nodeIdOf(this) });
         this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
     };
     
-    // 事件
-    Element.prototype.addEventListener = function(type, listener, options) {
-        if (!this._eventListeners[type]) this._eventListeners[type] = [];
-        if (listener && !this._eventListeners[type].some(item => item.listener === listener &&
-            !!item.options?.capture === !!options?.capture)) {
-            this._eventListeners[type].push({ listener, options });
-        }
-        Monitor.log('Event', 'addEventListener', {
-            elementId: this.__id__,
-            tagName: this.tagName,
-            type: type
-        });
-    };
-    
-    Element.prototype.removeEventListener = function(type, listener, options) {
-        if (this._eventListeners[type]) {
-            this._eventListeners[type] = this._eventListeners[type].filter(l => l.listener !== listener);
-        }
-        Monitor.log('Event', 'removeEventListener', {
-            elementId: this.__id__,
-            type: type
-        });
-    };
-    
-    Element.prototype.dispatchEvent = function(event) {
-        event.target = this;
-        for (let node = this; node; node = node.parentNode) {
-            event.currentTarget = node;
-            event.eventPhase = node === this ? 2 : 3;
-            const listeners = [...(node._eventListeners?.[event.type] || [])];
-            for (const { listener, options } of listeners) {
-                if (event._immediatePropagationStopped) break;
-                if (typeof listener === 'function') listener.call(node, event);
-                else if (listener && typeof listener.handleEvent === 'function') listener.handleEvent(event);
-                if (options?.once) node.removeEventListener(event.type, listener, options);
-            }
-            if (!event._immediatePropagationStopped && typeof node['on' + event.type] === 'function') {
-                node['on' + event.type].call(node, event);
-            }
-            if (!event.bubbles || event._propagationStopped) break;
-        }
-        if (event.bubbles && !event._propagationStopped) window.dispatchEvent(event);
-        event.currentTarget = null;
-        event.eventPhase = 0;
-        return !event.defaultPrevented;
-    };
+    // addEventListener / removeEventListener / dispatchEvent 继承自 EventTarget.prototype（eventCore.js）
     
     // 其他
     Element.prototype.insertAdjacentHTML = function(position, html) {
-        Monitor.log('DOM', 'insertAdjacentHTML', { elementId: this.__id__, position, html: html?.substring(0, 100) });
+        Monitor.log('DOM', 'insertAdjacentHTML', { elementId: nodeIdOf(this), position, html: html?.substring(0, 100) });
         const bridge = window.__htmlBridge__;
         if (!bridge) throw new Error('HTML parser is unavailable');
         const nodes = bridge.parseFragment(String(html)).map(createParsedNode);
@@ -985,7 +1075,7 @@
         }
     };
     Element.prototype.insertAdjacentElement = function(position, element) {
-        Monitor.log('DOM', 'insertAdjacentElement', { elementId: this.__id__, position });
+        Monitor.log('DOM', 'insertAdjacentElement', { elementId: nodeIdOf(this), position });
         const where = String(position).toLowerCase();
         if (where === 'beforebegin' || where === 'afterend') {
             if (!this.parentNode) return null;
@@ -1000,15 +1090,15 @@
         return element;
     };
     Element.prototype.insertAdjacentText = function(position, text) {
-        Monitor.log('DOM', 'insertAdjacentText', { elementId: this.__id__, position });
+        Monitor.log('DOM', 'insertAdjacentText', { elementId: nodeIdOf(this), position });
         this.insertAdjacentElement(position, this.ownerDocument.createTextNode(String(text)));
     };
     Element.prototype.attachShadow = function(options) {
-        Monitor.log('DOM', 'attachShadow', { elementId: this.__id__, options });
+        Monitor.log('DOM', 'attachShadow', { elementId: nodeIdOf(this), options });
         return { mode: options?.mode || 'open', host: this };
     };
     Element.prototype.animate = function(keyframes, options) {
-        Monitor.log('DOM', 'animate', { elementId: this.__id__ });
+        Monitor.log('DOM', 'animate', { elementId: nodeIdOf(this) });
         return { cancel: function() {}, play: function() {}, pause: function() {} };
     };
     Element.prototype.getAnimations = function() { return []; };
@@ -1017,24 +1107,23 @@
     // ==================== HTMLElement ====================
     function HTMLElement(tagName) {
         Element.call(this, tagName || 'div');
-        this.title = '';
-        this.lang = '';
-        this.dir = '';
-        this.hidden = false;
-        this.tabIndex = -1;
-        this.accessKey = '';
-        this.draggable = false;
-        this.spellcheck = true;
-        this.contentEditable = 'inherit';
-        this.isContentEditable = false;
-        this.translate = true;
-        this.autocapitalize = '';
-        this.inputMode = '';
-        this.enterKeyHint = '';
+        // title、lang、hidden、onclick 等是原型访问器（htmlElementAttributes.js）
     }
     HTMLElement.prototype = Object.create(Element.prototype);
     HTMLElement.prototype.constructor = HTMLElement;
-    
+    window.__htmlElementAttributes__.define(HTMLElement.prototype);
+    // style / dataset 属于 HTMLElement 与 SVGElement（ElementCSSInlineStyle、HTMLOrSVGElement），elements.js 会复制到它的原型上
+    defineTreeGetters(HTMLElement.prototype, {
+        // [PutForwards=cssText]
+        style: { get: s => s.style, set: (s, value) => { s.style.cssText = String(value); } },
+        dataset: s => s.dataset,
+        offsetParent: () => null,
+        offsetTop: () => 0,
+        offsetLeft: () => 0,
+        offsetWidth: () => 0,
+        offsetHeight: () => 0
+    });
+
     // ==================== 具体 HTML 元素类型 ====================
     
     // HTMLDivElement
@@ -1126,7 +1215,7 @@
     HTMLCanvasElement.prototype.getContext = function(contextType, contextAttributes) {
         Monitor.pushChain('canvas.getContext');
         Monitor.log('Canvas', 'getContext', {
-            elementId: this.__id__,
+            elementId: nodeIdOf(this),
             contextType: contextType,
             attributes: contextAttributes
         });
@@ -1147,7 +1236,9 @@
         if (contextType === '2d') {
             ctx = new CanvasRenderingContext2D(this);
         } else if (contextType === 'webgl' || contextType === 'webgl2' || contextType === 'experimental-webgl') {
-            ctx = new WebGLRenderingContext(this, contextType);
+            // WebGL 由 webgl.js 提供；此处是 elements.js 缺失时的兜底路径
+            const internals = window.__webglInternals__;
+            ctx = internals ? internals.createContext(this, contextType === 'webgl2' ? 'webgl2' : 'webgl') : null;
         } else {
             ctx = null;
         }
@@ -1158,7 +1249,7 @@
     };
     
     HTMLCanvasElement.prototype.toDataURL = function(type, quality) {
-        Monitor.log('Canvas', 'toDataURL', { elementId: this.__id__, type, quality });
+        Monitor.log('Canvas', 'toDataURL', { elementId: nodeIdOf(this), type, quality });
         
         const mock = Monitor.executeMock('canvas.toDataURL', [type, quality], this);
         if (mock.mocked) return mock.result;
@@ -1169,19 +1260,19 @@
     };
     
     HTMLCanvasElement.prototype.toBlob = function(callback, type, quality) {
-        Monitor.log('Canvas', 'toBlob', { elementId: this.__id__, type, quality });
+        Monitor.log('Canvas', 'toBlob', { elementId: nodeIdOf(this), type, quality });
         if (callback) {
             setTimeout(() => callback(new Blob([''], { type: type || 'image/png' })), 0);
         }
     };
     
     HTMLCanvasElement.prototype.captureStream = function(frameRate) {
-        Monitor.log('Canvas', 'captureStream', { elementId: this.__id__, frameRate });
+        Monitor.log('Canvas', 'captureStream', { elementId: nodeIdOf(this), frameRate });
         return { getTracks: () => [], getVideoTracks: () => [], getAudioTracks: () => [] };
     };
     
     HTMLCanvasElement.prototype.transferControlToOffscreen = function() {
-        Monitor.log('Canvas', 'transferControlToOffscreen', { elementId: this.__id__ });
+        Monitor.log('Canvas', 'transferControlToOffscreen', { elementId: nodeIdOf(this) });
         return new OffscreenCanvas(this.width, this.height);
     };
     
@@ -1373,146 +1464,6 @@
     };
     window.Path2D = Path2D;
     
-    // WebGLRenderingContext (简化版)
-    function WebGLRenderingContext(canvas, contextType) {
-        this.canvas = canvas;
-        this.contextType = contextType;
-        this.drawingBufferWidth = canvas.width;
-        this.drawingBufferHeight = canvas.height;
-        
-        // WebGL 常量
-        this.DEPTH_BUFFER_BIT = 0x00000100;
-        this.STENCIL_BUFFER_BIT = 0x00000400;
-        this.COLOR_BUFFER_BIT = 0x00004000;
-        this.POINTS = 0x0000;
-        this.LINES = 0x0001;
-        this.TRIANGLES = 0x0004;
-        this.VERTEX_SHADER = 0x8B31;
-        this.FRAGMENT_SHADER = 0x8B30;
-        this.ARRAY_BUFFER = 0x8892;
-        this.ELEMENT_ARRAY_BUFFER = 0x8893;
-        this.FLOAT = 0x1406;
-        this.RGBA = 0x1908;
-        this.UNSIGNED_BYTE = 0x1401;
-        this.TEXTURE_2D = 0x0DE1;
-        this.TEXTURE0 = 0x84C0;
-        this.COMPILE_STATUS = 0x8B81;
-        this.LINK_STATUS = 0x8B82;
-        this.VENDOR = 0x1F00;
-        this.RENDERER = 0x1F01;
-        this.VERSION = 0x1F02;
-        this.SHADING_LANGUAGE_VERSION = 0x8B8C;
-        this._debugEnabled = false;
-    }
-    
-    WebGLRenderingContext.prototype = {
-        getExtension: function(name) {
-            Monitor.log('WebGL', 'getExtension', { name });
-            const supported = window.__profile__?.webgl?.extensions || [];
-            if (supported.includes(String(name))) {
-                if (name === 'WEBGL_debug_renderer_info') {
-                    this._debugEnabled = true;
-                    return { UNMASKED_VENDOR_WEBGL: 0x9245, UNMASKED_RENDERER_WEBGL: 0x9246 };
-                }
-                return {};
-            }
-            return null;
-        },
-        getSupportedExtensions: function() { return [...(window.__profile__?.webgl?.extensions || [])]; },
-        getParameter: function(pname) {
-            Monitor.log('WebGL', 'getParameter', { pname });
-            
-            const mock = Monitor.executeMock('webgl.getParameter', [pname], this);
-            if (mock.mocked) return mock.result;
-            const profile = window.__profile__?.webgl;
-            if (!profile) return null;
-            const key = String(pname);
-            if ((key === '37445' || key === '37446') && !this._debugEnabled) return null;
-            if (Object.prototype.hasOwnProperty.call(profile.parameters || {}, key)) {
-                return profile.parameters[key];
-            }
-            const fields = { '7936': 'vendor', '7937': 'renderer', '7938': 'version',
-                '35724': 'shadingLanguageVersion', '37445': 'unmaskedVendor',
-                '37446': 'unmaskedRenderer' };
-            if (fields[key] && Object.prototype.hasOwnProperty.call(profile, fields[key])) {
-                return profile[fields[key]];
-            }
-            return null;
-        },
-        getShaderPrecisionFormat: function(shadertype, precisiontype) {
-            return { rangeMin: 127, rangeMax: 127, precision: 23 };
-        },
-        createShader: function(type) { return { _type: type }; },
-        shaderSource: function(shader, source) { shader._source = source; },
-        compileShader: function(shader) { shader._compiled = true; },
-        getShaderParameter: function(shader, pname) { return pname === this.COMPILE_STATUS; },
-        getShaderInfoLog: function(shader) { return ''; },
-        createProgram: function() { return { _shaders: [] }; },
-        attachShader: function(program, shader) { program._shaders.push(shader); },
-        linkProgram: function(program) { program._linked = true; },
-        getProgramParameter: function(program, pname) { return pname === this.LINK_STATUS; },
-        getProgramInfoLog: function(program) { return ''; },
-        useProgram: function(program) {},
-        deleteShader: function(shader) {},
-        deleteProgram: function(program) {},
-        createBuffer: function() { return {}; },
-        bindBuffer: function(target, buffer) {},
-        bufferData: function(target, data, usage) {},
-        deleteBuffer: function(buffer) {},
-        createTexture: function() { return {}; },
-        bindTexture: function(target, texture) {},
-        texImage2D: function(...args) {},
-        texParameteri: function(target, pname, param) {},
-        deleteTexture: function(texture) {},
-        activeTexture: function(texture) {},
-        createFramebuffer: function() { return {}; },
-        bindFramebuffer: function(target, framebuffer) {},
-        framebufferTexture2D: function(...args) {},
-        deleteFramebuffer: function(framebuffer) {},
-        getUniformLocation: function(program, name) { return { _name: name }; },
-        getAttribLocation: function(program, name) { return 0; },
-        uniform1f: function(location, x) {},
-        uniform2f: function(location, x, y) {},
-        uniform3f: function(location, x, y, z) {},
-        uniform4f: function(location, x, y, z, w) {},
-        uniform1i: function(location, x) {},
-        uniformMatrix4fv: function(location, transpose, value) {},
-        vertexAttribPointer: function(...args) {},
-        enableVertexAttribArray: function(index) {},
-        disableVertexAttribArray: function(index) {},
-        viewport: function(x, y, width, height) {},
-        clear: function(mask) {},
-        clearColor: function(red, green, blue, alpha) {},
-        clearDepth: function(depth) {},
-        clearStencil: function(s) {},
-        enable: function(cap) {},
-        disable: function(cap) {},
-        blendFunc: function(sfactor, dfactor) {},
-        depthFunc: function(func) {},
-        cullFace: function(mode) {},
-        drawArrays: function(mode, first, count) {},
-        drawElements: function(mode, count, type, offset) {},
-        flush: function() {},
-        finish: function() {},
-        readPixels: function(x, y, width, height, format, type, pixels) {
-            Monitor.log('WebGL', 'readPixels', { x, y, width, height });
-        },
-        getContextAttributes: function() {
-            return {
-                alpha: true,
-                antialias: true,
-                depth: true,
-                failIfMajorPerformanceCaveat: false,
-                powerPreference: 'default',
-                premultipliedAlpha: true,
-                preserveDrawingBuffer: false,
-                stencil: false
-            };
-        },
-        isContextLost: function() { return false; }
-    };
-    window.WebGLRenderingContext = WebGLRenderingContext;
-    
     // HTMLImageElement
     function HTMLImageElement() {
         HTMLElement.call(this, 'img');
@@ -1541,7 +1492,7 @@
             set: function(val) {
                 this._src = val;
                 this.currentSrc = val;
-                Monitor.log('Image', 'setSrc', { elementId: self.__id__, src: val });
+                Monitor.log('Image', 'setSrc', { elementId: nodeIdOf(self), src: val });
                 // 模拟异步加载完成
                 setTimeout(() => {
                     self.complete = true;
@@ -1555,7 +1506,7 @@
     HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
     HTMLImageElement.prototype.constructor = HTMLImageElement;
     HTMLImageElement.prototype.decode = function() {
-        Monitor.log('Image', 'decode', { elementId: this.__id__ });
+        Monitor.log('Image', 'decode', { elementId: nodeIdOf(this) });
         return Promise.resolve();
     };
     
@@ -1794,10 +1745,10 @@
     HTMLFormElement.prototype = Object.create(HTMLElement.prototype);
     HTMLFormElement.prototype.constructor = HTMLFormElement;
     HTMLFormElement.prototype.submit = function() {
-        Monitor.log('Form', 'submit', { elementId: this.__id__, action: this.action });
+        Monitor.log('Form', 'submit', { elementId: nodeIdOf(this), action: this.action });
     };
     HTMLFormElement.prototype.reset = function() {
-        Monitor.log('Form', 'reset', { elementId: this.__id__ });
+        Monitor.log('Form', 'reset', { elementId: nodeIdOf(this) });
     };
     HTMLFormElement.prototype.requestSubmit = function(submitter) {
         this.submit();
@@ -1863,16 +1814,16 @@
     HTMLVideoElement.prototype = Object.create(HTMLElement.prototype);
     HTMLVideoElement.prototype.constructor = HTMLVideoElement;
     HTMLVideoElement.prototype.play = function() {
-        Monitor.log('Video', 'play', { elementId: this.__id__ });
+        Monitor.log('Video', 'play', { elementId: nodeIdOf(this) });
         this.paused = false;
         return Promise.resolve();
     };
     HTMLVideoElement.prototype.pause = function() {
-        Monitor.log('Video', 'pause', { elementId: this.__id__ });
+        Monitor.log('Video', 'pause', { elementId: nodeIdOf(this) });
         this.paused = true;
     };
     HTMLVideoElement.prototype.load = function() {
-        Monitor.log('Video', 'load', { elementId: this.__id__ });
+        Monitor.log('Video', 'load', { elementId: nodeIdOf(this) });
     };
     HTMLVideoElement.prototype.canPlayType = function(type) {
         Monitor.log('Video', 'canPlayType', { type });
@@ -1898,9 +1849,7 @@
     // HTMLAudioElement
     function HTMLAudioElement() {
         HTMLVideoElement.call(this);
-        this.tagName = 'AUDIO';
-        this.localName = 'audio';
-        this.nodeName = 'AUDIO';
+        Object.assign(treeOf(this), { tagName: 'AUDIO', localName: 'audio', nodeName: 'AUDIO' });
     }
     HTMLAudioElement.prototype = Object.create(HTMLVideoElement.prototype);
     HTMLAudioElement.prototype.constructor = HTMLAudioElement;
@@ -2231,16 +2180,16 @@
     HTMLDialogElement.prototype.constructor = HTMLDialogElement;
     HTMLDialogElement.prototype.show = function() {
         this.open = true;
-        Monitor.log('Dialog', 'show', { elementId: this.__id__ });
+        Monitor.log('Dialog', 'show', { elementId: nodeIdOf(this) });
     };
     HTMLDialogElement.prototype.showModal = function() {
         this.open = true;
-        Monitor.log('Dialog', 'showModal', { elementId: this.__id__ });
+        Monitor.log('Dialog', 'showModal', { elementId: nodeIdOf(this) });
     };
     HTMLDialogElement.prototype.close = function(returnValue) {
         this.open = false;
         if (returnValue !== undefined) this.returnValue = returnValue;
-        Monitor.log('Dialog', 'close', { elementId: this.__id__, returnValue });
+        Monitor.log('Dialog', 'close', { elementId: nodeIdOf(this), returnValue });
     };
     
     // HTMLSlotElement
@@ -2467,54 +2416,75 @@
         'data': HTMLElement,
         'noscript': HTMLElement
     };
-    
+
+    // 映射到基类 HTMLElement 的标签要带上标签名，否则会得到 localName 为 div 的元素
+    for (const [tag, Constructor] of Object.entries(elementConstructors)) {
+        if (Constructor === HTMLElement) {
+            elementConstructors[tag] = function () { return new HTMLElement(tag); };
+        }
+    }
+
+    // ==================== Text Node ====================
+    // ==================== CharacterData ====================
+    // Text / Comment 的字符数据存在节点内部状态（data 字段），脚本经原型访问器读写
+    function isCharacterData(state) {
+        return state.nodeType === 3 || state.nodeType === 8;
+    }
+
+    function CharacterData() { throw new TypeError('Illegal constructor'); }
+    CharacterData.prototype = Object.create(Node.prototype);
+    CharacterData.prototype.constructor = CharacterData;
+    Object.setPrototypeOf(CharacterData, Node);
+    defineTreeGetters(CharacterData.prototype, {
+        data: { get: s => s.data, set: (s, value, node) => { setCharacterData(s, value, node); } },
+        length: s => s.data.length
+    });
+    const characterDataMethods = {
+        substringData(offset, count) { return this.data.substring(offset, offset + count); },
+        appendData(data) { this.data += String(data); },
+        insertData(offset, data) { this.data = this.data.slice(0, offset) + String(data) + this.data.slice(offset); },
+        deleteData(offset, count) { this.data = this.data.slice(0, offset) + this.data.slice(offset + count); },
+        replaceData(offset, count, data) { this.data = this.data.slice(0, offset) + String(data) + this.data.slice(offset + count); }
+    };
+    for (const [key, method] of Object.entries(characterDataMethods)) {
+        CharacterData.prototype[key] = window.safefunction(method, key);
+    }
+    window.CharacterData = CharacterData;
+
+    // nodeValue / textContent：字符数据节点返回 data，其他节点 nodeValue 为 null（Element 另有 textContent 实现）
+    defineTreeGetters(Node.prototype, {
+        nodeValue: {
+            get: s => (isCharacterData(s) ? s.data : null),
+            set: (s, value, node) => { if (isCharacterData(s)) setCharacterData(s, value, node); }
+        },
+        textContent: {
+            get: s => (isCharacterData(s) ? s.data : null),
+            set: (s, value, node) => { if (isCharacterData(s)) setCharacterData(s, value, node); }
+        }
+    });
+
     // ==================== Text Node ====================
     function Text(data) {
         Node.call(this);
-        this.nodeType = 3;
-        this.nodeName = '#text';
-        this._data = data !== undefined ? String(data) : '';
-        this.nodeValue = this._data;
-        this.textContent = this._data;
-        this.length = this._data.length;
-        
-        Object.defineProperty(this, 'data', {
-            get: function() { return this._data; },
-            set: function(val) {
-                this._data = String(val);
-                this.nodeValue = this._data;
-                this.textContent = this._data;
-                this.length = this._data.length;
-            }
-        });
+        Object.assign(treeOf(this), { nodeType: 3, nodeName: '#text', data: data !== undefined ? String(data) : '' });
     }
-    Text.prototype = Object.create(Node.prototype);
+    Text.prototype = Object.create(CharacterData.prototype);
     Text.prototype.constructor = Text;
-    Text.prototype.substringData = function(offset, count) { return this._data.substring(offset, offset + count); };
-    Text.prototype.appendData = function(data) { this.data += data; };
-    Text.prototype.insertData = function(offset, data) { this.data = this._data.slice(0, offset) + data + this._data.slice(offset); };
-    Text.prototype.deleteData = function(offset, count) { this.data = this._data.slice(0, offset) + this._data.slice(offset + count); };
-    Text.prototype.replaceData = function(offset, count, data) { this.data = this._data.slice(0, offset) + data + this._data.slice(offset + count); };
     Text.prototype.splitText = function(offset) {
-        const newText = new Text(this._data.slice(offset));
-        this.data = this._data.slice(0, offset);
+        const newText = new Text(this.data.slice(offset));
+        this.data = this.data.slice(0, offset);
         if (this.parentNode) this.parentNode.insertBefore(newText, this.nextSibling);
         return newText;
     };
-    Text.prototype.cloneNode = function() { return new Text(this._data); };
+    Text.prototype.cloneNode = function() { return new Text(this.data); };
     window.Text = Text;
-    
+
     // ==================== Comment ====================
     function Comment(data) {
         Node.call(this);
-        this.nodeType = 8;
-        this.nodeName = '#comment';
-        this.data = data || '';
-        this.nodeValue = this.data;
-        this.textContent = this.data;
-        this.length = this.data.length;
+        Object.assign(treeOf(this), { nodeType: 8, nodeName: '#comment', data: data !== undefined ? String(data) : '' });
     }
-    Comment.prototype = Object.create(Node.prototype);
+    Comment.prototype = Object.create(CharacterData.prototype);
     Comment.prototype.constructor = Comment;
     Comment.prototype.cloneNode = function() { return new Comment(this.data); };
     window.Comment = Comment;
@@ -2522,15 +2492,11 @@
     // ==================== DocumentFragment ====================
     function DocumentFragment() {
         Node.call(this);
-        this.nodeType = 11;
-        this.nodeName = '#document-fragment';
-        this.children = [];
-        this.childElementCount = 0;
-        this.firstElementChild = null;
-        this.lastElementChild = null;
+        Object.assign(treeOf(this), { nodeType: 11, nodeName: '#document-fragment' });
     }
     DocumentFragment.prototype = Object.create(Node.prototype);
     DocumentFragment.prototype.constructor = DocumentFragment;
+    defineTreeGetters(DocumentFragment.prototype, parentNodeGetters);
     DocumentFragment.prototype._updateChildReferences = Element.prototype._updateChildReferences;
     DocumentFragment.prototype.getElementById = function(id) { return null; };
     DocumentFragment.prototype.querySelector = function(selector) { return null; };
@@ -2543,26 +2509,11 @@
     };
     window.DocumentFragment = DocumentFragment;
     
-    // ==================== DOMException ====================
-    function DOMException(message, name) {
-        Error.call(this, message);
-        this.name = name || 'DOMException';
-        this.message = message || '';
-        this.code = 0;
-    }
-    DOMException.prototype = Object.create(Error.prototype);
-    DOMException.prototype.constructor = DOMException;
-    window.DOMException = DOMException;
+    // DOMException 由 env/webapi/domexception.js 提供（基础模块，始终先于本文件加载）
     
     // ==================== Document ====================
     const initialDocumentURL = window.location?.href || 'https://example.com/';
     const document = {
-        // 基本属性
-        nodeType: 9,
-        nodeName: '#document',
-        nodeValue: null,
-        ownerDocument: null,
-        
         // 文档信息
         documentElement: null,
         head: null,
@@ -2596,9 +2547,6 @@
         designMode: 'off',
         dir: '',
         
-        // 事件监听器
-        _eventListeners: {},
-        
         // ========== 创建元素（增强监控） ==========
         createElement: function(tagName, options) {
             Monitor.pushChain('document.createElement');
@@ -2628,10 +2576,13 @@
                     element = new HTMLElement(lowerTag);
                 }
             } else {
-                element = new HTMLElement(lowerTag);
+                element = (window.__unknownElementFactory__ && window.__unknownElementFactory__(lowerTag)) ||
+                    new HTMLElement(lowerTag);
             }
             
-            element.ownerDocument = this;
+            treeOf(element).ownerDocument = this;
+            // 元素实例不应有自有属性（构造期间写入的搬到原型上）
+            window.__elementProps__?.lift(element);
             const urlAttribute = ({ a: 'href', area: 'href', link: 'href', base: 'href',
                 form: 'action',
                 img: 'src', script: 'src', iframe: 'src', source: 'src' })[lowerTag];
@@ -2641,7 +2592,7 @@
             Monitor.logCreate(tagName, element, options);
             Monitor.log('DOM', 'createElement', {
                 tagName: tagName,
-                elementId: element.__id__,
+                elementId: nodeIdOf(element),
                 options: options
             });
             
@@ -2658,14 +2609,25 @@
                 return mock.result;
             }
             
-            const element = new Element(qualifiedName, namespaceURI);
-            element.ownerDocument = this;
+            // HTML 命名空间与 createElement 相同；SVG 用 SVGElement（elements.js 提供），style / dataset 才可用
+            let element;
+            if (namespaceURI === HTML_NAMESPACE) {
+                element = this.createElement(qualifiedName, options);
+            } else if (namespaceURI === SVG_NAMESPACE && typeof window.SVGElement === 'function') {
+                // window.SVGElement 是不可构造的接口对象，内部创建用真实构造函数
+                const SVGElementCtor = window.__elementInterfaces__.raw(window.SVGElement);
+                element = Object.create(SVGElementCtor.prototype);
+                SVGElementCtor.call(element, qualifiedName);
+            } else {
+                element = new Element(qualifiedName, namespaceURI);
+            }
+            treeOf(element).ownerDocument = this;
             
             Monitor.logCreate(qualifiedName, element, { namespaceURI });
             Monitor.log('DOM', 'createElementNS', {
                 namespaceURI: namespaceURI,
                 qualifiedName: qualifiedName,
-                elementId: element.__id__
+                elementId: nodeIdOf(element)
             });
             
             Monitor.popChain();
@@ -2674,21 +2636,21 @@
         
         createTextNode: function(data) {
             const node = new Text(data);
-            node.ownerDocument = this;
+            treeOf(node).ownerDocument = this;
             Monitor.log('DOM', 'createTextNode', { data: data?.substring(0, 50) });
             return node;
         },
         
         createComment: function(data) {
             const node = new Comment(data);
-            node.ownerDocument = this;
+            treeOf(node).ownerDocument = this;
             Monitor.log('DOM', 'createComment', { data: data?.substring(0, 50) });
             return node;
         },
         
         createDocumentFragment: function() {
             const fragment = new DocumentFragment();
-            fragment.ownerDocument = this;
+            treeOf(fragment).ownerDocument = this;
             Monitor.log('DOM', 'createDocumentFragment', {});
             return fragment;
         },
@@ -2731,7 +2693,7 @@
         },
         
         createTreeWalker: function(root, whatToShow, filter) {
-            Monitor.log('DOM', 'createTreeWalker', { rootId: root?.__id__, whatToShow });
+            Monitor.log('DOM', 'createTreeWalker', { rootId: nodeIdOf(root), whatToShow });
             return {
                 root: root,
                 whatToShow: whatToShow || 0xFFFFFFFF,
@@ -2748,7 +2710,7 @@
         },
         
         createNodeIterator: function(root, whatToShow, filter) {
-            Monitor.log('DOM', 'createNodeIterator', { rootId: root?.__id__ });
+            Monitor.log('DOM', 'createNodeIterator', { rootId: nodeIdOf(root) });
             return {
                 root: root,
                 whatToShow: whatToShow || 0xFFFFFFFF,
@@ -2908,7 +2870,7 @@
         adoptNode: function(node) {
             Monitor.log('DOM', 'adoptNode', {});
             if (node.parentNode) node.parentNode.removeChild(node);
-            node.ownerDocument = this;
+            treeOf(node).ownerDocument = this;
             return node;
         },
         
@@ -2929,32 +2891,8 @@
         exitPictureInPicture: function() { return Promise.resolve(); },
         exitPointerLock: function() {},
         
-        // 事件
-        addEventListener: function(type, listener, options) {
-            if (!this._eventListeners[type]) this._eventListeners[type] = [];
-            this._eventListeners[type].push({ listener, options });
-            Monitor.log('Event', 'addEventListener', { target: 'document', type });
-        },
-        
-        removeEventListener: function(type, listener, options) {
-            if (this._eventListeners[type]) {
-                this._eventListeners[type] = this._eventListeners[type].filter(l => l.listener !== listener);
-            }
-            Monitor.log('Event', 'removeEventListener', { target: 'document', type });
-        },
-        
-        dispatchEvent: function(event) {
-            event.target = this;
-            event.currentTarget = this;
-            const listeners = this._eventListeners[event.type] || [];
-            listeners.forEach(({ listener }) => {
-                if (typeof listener === 'function') {
-                    listener.call(this, event);
-                }
-            });
-            return !event.defaultPrevented;
-        },
-        
+        // 事件方法来自 EventTarget.prototype（document 经 Document.prototype → Node.prototype 继承）
+
         // 其他属性
         defaultView: null,
         implementation: {
@@ -3006,7 +2944,7 @@
     function initDocumentStructure() {
         // 创建 html 元素
         document.documentElement = document.createElement('html');
-        document.documentElement.ownerDocument = document;
+        treeOf(document.documentElement).ownerDocument = document;
         
         // 创建 head 和 body
         document.head = document.createElement('head');
@@ -3022,6 +2960,17 @@
         document.activeElement = document.body;
     }
     
+    // document 不经过 Node()，单独建立内部状态
+    initNodeState(document, 9, '#document');
+
+    function attachDocumentElement(root) {
+        const state = treeOf(document);
+        state.childNodes = [root];
+        state.first = root;
+        state.last = root;
+        treeOf(root).parent = document;
+    }
+
     initDocumentStructure();
 
     let fallbackTitle = '';
@@ -3043,10 +2992,7 @@
         }
     });
 
-    document.childNodes = [document.documentElement];
-    document.firstChild = document.documentElement;
-    document.lastChild = document.documentElement;
-    document.documentElement.parentNode = document;
+    attachDocumentElement(document.documentElement);
     for (const [name, selector] of Object.entries({
         images: 'img', forms: 'form', scripts: 'script', links: 'a[href], area[href]',
         anchors: 'a[name]', embeds: 'embed'
@@ -3065,19 +3011,14 @@
             const html = tree.find(node => node.type === 'element' && node.name === 'html');
             if (!html) throw new Error('Parsed HTML has no document element');
             document.documentElement._setConnected(false);
-            document.documentElement = createParsedNode(html);
-            document.childNodes = [document.documentElement];
-            document.firstChild = document.documentElement;
-            document.lastChild = document.documentElement;
-            document.documentElement.parentNode = document;
+            docState.documentElement = createParsedNode(html);
+            attachDocumentElement(document.documentElement);
             document.documentElement._setConnected(true);
-            document.head = document.documentElement.querySelector('head');
-            document.body = document.documentElement.querySelector('body');
-            document.scrollingElement = document.documentElement;
-            document.activeElement = document.body;
+            docState.head = document.documentElement.querySelector('head');
+            docState.body = document.documentElement.querySelector('body');
+            docState.scrollingElement = document.documentElement;
+            docState.activeElement = document.body;
             fallbackTitle = document.head?.querySelector('title')?.textContent || '';
-            const base = document.head?.querySelector('base[href]')?.getAttribute('href');
-            document.baseURI = base ? new URL(base, document.URL).href : document.URL;
             return document;
         }
     });
@@ -3095,6 +3036,126 @@
         [Symbol.toStringTag]: { value: 'HTMLDocument', configurable: true }
     });
     Object.setPrototypeOf(document, HTMLDocument.prototype);
+    // document 是对象字面量，不经过 Node()，单独登记 EventTarget 身份
+    window.__webidl__.brand(document, 'EventTarget');
+
+    // ==================== Document 属性迁到原型 ====================
+    // Chrome 中 document 的自有属性只有 location（[LegacyUnforgeable]），其余都在 Document.prototype 上。
+    // 数据放在 docState；URL / baseURI / domain 由 location 计算；cookie 按 cookie 规则读写。
+    const docState = {};
+    const markNative = window.safefunction;
+
+    function checkDocument(object) {
+        if (object !== document) throw new TypeError('Illegal invocation');
+    }
+
+    function defineDocumentAccessor(key, get, set) {
+        const holder = {
+            get [key]() { checkDocument(this); return get(); },
+            set [key](value) { checkDocument(this); set(value); }
+        };
+        const descriptor = Object.getOwnPropertyDescriptor(holder, key);
+        Object.defineProperty(Document.prototype, key, {
+            get: markNative(descriptor.get, 'get ' + key),
+            set: set ? markNative(descriptor.set, 'set ' + key) : undefined,
+            enumerable: true, configurable: true
+        });
+    }
+
+    function defineDocumentMethod(key, impl) {
+        const holder = { [key](...args) { checkDocument(this); return impl.apply(this, args); } };
+        Object.defineProperty(holder[key], 'length', { value: impl.length });
+        Object.defineProperty(Document.prototype, key, {
+            value: markNative(holder[key], key), writable: true, enumerable: true, configurable: true
+        });
+    }
+
+    // document.cookie：写入一条 cookie，读取时拼成 "a=1; b=2"；过期即删除，HttpOnly 的写入被忽略
+    const cookieJar = new Map();
+    function setCookie(text) {
+        const [pair, ...attributes] = String(text).split(';');
+        const separator = pair.indexOf('=');
+        const name = (separator < 0 ? '' : pair.slice(0, separator)).trim();
+        const value = (separator < 0 ? pair : pair.slice(separator + 1)).trim();
+        let expired = false;
+        for (const attribute of attributes) {
+            const [rawKey, ...rest] = attribute.split('=');
+            const key = rawKey.trim().toLowerCase();
+            const attributeValue = rest.join('=').trim();
+            if (key === 'httponly') return;
+            if (key === 'max-age' && Number(attributeValue) <= 0) expired = true;
+            if (key === 'expires' && Date.parse(attributeValue) <= Date.now()) expired = true;
+        }
+        if (expired) cookieJar.delete(name);
+        else cookieJar.set(name, value);
+    }
+    function cookieString() {
+        return Array.from(cookieJar, ([name, value]) => (name ? name + '=' + value : value)).join('; ');
+    }
+
+    function documentBaseURI() {
+        const base = docState.head?.querySelector('base[href]')?.getAttribute('href');
+        try { return base ? new URL(base, window.location.href).href : window.location.href; }
+        catch (_) { return window.location.href; }
+    }
+
+    const derivedDocumentAccessors = {
+        URL: [() => window.location.href, null],
+        documentURI: [() => window.location.href, null],
+        baseURI: [documentBaseURI, null],
+        // 设置 domain 需要同站校验，这里忽略写入
+        domain: [() => window.location.hostname, () => {}],
+        cookie: [cookieString, setCookie]
+    };
+    const writableDocumentKeys = new Set(['designMode', 'dir', 'body']);
+
+    for (const key of Reflect.ownKeys(document)) {
+        if (typeof key !== 'string') continue;
+        const descriptor = Object.getOwnPropertyDescriptor(document, key);
+        delete document[key];
+        if (Object.prototype.hasOwnProperty.call(derivedDocumentAccessors, key)) continue;
+        if (descriptor.get || descriptor.set) {
+            defineDocumentAccessor(key, () => descriptor.get.call(document),
+                descriptor.set ? value => descriptor.set.call(document, value) : null);
+        } else if (typeof descriptor.value === 'function') {
+            defineDocumentMethod(key, descriptor.value);
+        } else {
+            docState[key] = descriptor.value;
+            defineDocumentAccessor(key, () => docState[key],
+                writableDocumentKeys.has(key) ? value => { docState[key] = value; } : null);
+        }
+    }
+    for (const [key, [get, set]] of Object.entries(derivedDocumentAccessors)) defineDocumentAccessor(key, get, set);
+
+    // location 是 document 上唯一的自有属性；赋值转写到 location.href
+    const locationHolder = {
+        get location() { return window.location; },
+        set location(value) { window.location.href = String(value); }
+    };
+    const locationDescriptor = Object.getOwnPropertyDescriptor(locationHolder, 'location');
+    Object.defineProperty(document, 'location', {
+        get: markNative(locationDescriptor.get, 'get location'),
+        set: markNative(locationDescriptor.set, 'set location'),
+        enumerable: true, configurable: false
+    });
+
+    // 采集快照写入内部状态（属性本身只读）；URL / domain 由 location 快照决定
+    const documentSnapshotKeys = new Set(['referrer', 'characterSet', 'charset', 'inputEncoding', 'contentType',
+        'readyState', 'hidden', 'visibilityState', 'lastModified', 'designMode', 'dir']);
+    Object.defineProperty(window, '__applyDocumentSnapshot__', {
+        value(data) {
+            if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+            for (const [key, value] of Object.entries(data)) {
+                if (value === undefined) continue;
+                if (documentSnapshotKeys.has(key)) docState[key] = value;
+                else if (key === 'title') document.title = String(value);
+                else if (key === 'cookie' && typeof value === 'string') {
+                    for (const part of value.split(';')) if (part.trim()) setCookie(part);
+                }
+            }
+        },
+        writable: true, configurable: true
+    });
     Object.defineProperty(window, 'document', {
         enumerable: true, configurable: false, get: () => document
     });
@@ -3130,6 +3191,91 @@
     window.HTMLProgressElement = HTMLProgressElement;
     window.HTMLMeterElement = HTMLMeterElement;
     window.HTMLTemplateElement = HTMLTemplateElement;
+    // 元素接口：toStringTag 与 window 导出（elements.js 之后会用同名类替换其中一部分）
+    const elementInterfaces = {
+        HTMLElement,
+        HTMLDivElement,
+        HTMLSpanElement,
+        HTMLParagraphElement,
+        HTMLHeadingElement,
+        HTMLBRElement,
+        HTMLHRElement,
+        HTMLPreElement,
+        HTMLScriptElement,
+        HTMLCanvasElement,
+        HTMLImageElement,
+        HTMLInputElement,
+        HTMLButtonElement,
+        HTMLTextAreaElement,
+        HTMLSelectElement,
+        HTMLOptionElement,
+        HTMLAnchorElement,
+        HTMLFormElement,
+        HTMLIFrameElement,
+        HTMLVideoElement,
+        HTMLAudioElement,
+        HTMLStyleElement,
+        HTMLLinkElement,
+        HTMLMetaElement,
+        HTMLTitleElement,
+        HTMLBaseElement,
+        HTMLHeadElement,
+        HTMLBodyElement,
+        HTMLHtmlElement,
+        HTMLTableElement,
+        HTMLTableSectionElement,
+        HTMLTableRowElement,
+        HTMLTableCellElement,
+        HTMLTableCaptionElement,
+        HTMLUListElement,
+        HTMLOListElement,
+        HTMLLIElement,
+        HTMLDListElement,
+        HTMLLabelElement,
+        HTMLFieldSetElement,
+        HTMLLegendElement,
+        HTMLProgressElement,
+        HTMLMeterElement,
+        HTMLOutputElement,
+        HTMLDetailsElement,
+        HTMLSummaryElement,
+        HTMLDialogElement,
+        HTMLSlotElement,
+        HTMLTemplateElement,
+        HTMLPictureElement,
+        HTMLSourceElement,
+        HTMLTrackElement,
+        HTMLEmbedElement,
+        HTMLObjectElement
+    };
+    for (const [name, ctor] of Object.entries(elementInterfaces)) {
+        window.__elementInterfaces__.define(ctor, name);
+    }
+
     window.Node = Node;
-    
+
+    // 供 domApis.js 复用 HTML 解析与序列化（Range.createContextualFragment、DOMParser、XMLSerializer）
+    Object.defineProperty(window, '__documentParsing__', {
+        value: Object.freeze({
+            parseNodes(html) {
+                const bridge = window.__htmlBridge__;
+                if (!bridge) return [];
+                return bridge.parseFragment(String(html)).map(createParsedNode);
+            },
+            serialize(node) { return serializeNode(node); },
+            collection(resolve) { return liveCollection(resolve); },
+            // 用给定原型创建一个带节点状态的节点（DocumentType 等）
+            createNode(prototype, nodeType, nodeName, fields) {
+                const node = Object.create(prototype);
+                const state = initNodeState(node, nodeType, nodeName);
+                state.ownerDocument = document;
+                Object.assign(state, fields || {});
+                window.__webidl__.brand(node, 'EventTarget', {});
+                return node;
+            },
+            stateOf(node) { return treeOf(node); }
+        }),
+        configurable: true
+    });
+
 })();

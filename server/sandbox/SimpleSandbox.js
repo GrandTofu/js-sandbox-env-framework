@@ -6,13 +6,14 @@
 import vm from 'vm';
 import fs from 'fs';
 import path from 'path';
-import { URL, URLSearchParams } from 'node:url';
+import { URL } from 'node:url';
 import { fileURLToPath } from 'node:url';
 import { browserEnvModules } from './envModules.js';
-import { createHtmlBridge } from './htmlBridge.js';
+import { createBrowserContext, loadHTMLIntoContext, disposeBrowserContext } from './browserContext.js';
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ENV_ROOT = path.join(PROJECT_ROOT, 'env');
+const HOST_CONSOLE = { debug: 'log', log: 'log', info: 'info', warn: 'warn', error: 'error' };
 
 export class SimpleSandbox {
     constructor() {
@@ -20,6 +21,7 @@ export class SimpleSandbox {
         this.undefinedPaths = [];
         this.accessLogs = [];
         this.callLogs = [];
+        this.consoleOutput = [];
     }
 
     /**
@@ -28,112 +30,36 @@ export class SimpleSandbox {
     init(options = {}) {
         const { timeout = 60000, profile = null } = options;
 
-        // 创建沙箱上下文
-        const sandbox = {
-            console: {
-                log: (...args) => {
-                    console.log('[Sandbox]', ...args);
-                    if (this.context.__consoleOutput__) {
-                        this.context.__consoleOutput__.push(['log', ...args]);
-                    }
-                },
-                error: (...args) => {
-                    console.error('[Sandbox]', ...args);
-                    if (this.context.__consoleOutput__) {
-                        this.context.__consoleOutput__.push(['error', ...args]);
-                    }
-                },
-                warn: (...args) => {
-                    console.warn('[Sandbox]', ...args);
-                    if (this.context.__consoleOutput__) {
-                        this.context.__consoleOutput__.push(['warn', ...args]);
-                    }
-                },
-                info: (...args) => {
-                    console.info('[Sandbox]', ...args);
-                    if (this.context.__consoleOutput__) {
-                        this.context.__consoleOutput__.push(['info', ...args]);
-                    }
-                }
-            },
-            setTimeout: (fn, delay) => 0,
-            setInterval: (fn, delay) => 0,
-            clearTimeout: (id) => {},
-            clearInterval: (id) => {},
-            // Base64 编解码
-            atob: (str) => Buffer.from(str, 'base64').toString('binary'),
-            btoa: (str) => Buffer.from(str, 'binary').toString('base64'),
-            URL,
-            URLSearchParams,
-            // XMLHttpRequest 基础实现
-            XMLHttpRequest: class XMLHttpRequest {
-                constructor() {
-                    this.bdmsInvokeList = [];
-                }
-                open() {}
-                send() {}
-                setRequestHeader() {}
-            },
-            __consoleOutput__: [],
-            __undefinedPaths__: [],
-            __profile__: profile || null,
-            // 日志记录辅助
-            __logAccess__: (path, value) => {
-                this.accessLogs.push({
-                    path,
-                    value: String(value).substring(0, 100),
-                    timestamp: Date.now()
-                });
-            },
-            __logCall__: (path, args) => {
-                this.callLogs.push({
-                    path,
-                    args: args || [],
-                    timestamp: Date.now()
-                });
+        this.consoleOutput = [];
+        this.context = createBrowserContext({
+            profile,
+            timeout,
+            onConsole: (level, args) => {
+                console[HOST_CONSOLE[level] || 'log']('[Sandbox]', ...args);
+                this.consoleOutput.push([level, ...args]);
             }
-        };
-
-        // 添加 window 引用
-        sandbox.window = sandbox;
-        sandbox.global = sandbox;
-        sandbox.globalThis = sandbox;
-        sandbox.self = sandbox;
-        
-        // 创建上下文
-        this.context = vm.createContext(sandbox);
+        });
         this.timeout = timeout;
         this.profile = profile;
         this.loadedEnvFiles = new Set();
-        for (const modulePath of ['env/core/applyCollectedEnvironment.js', 'env/core/NativeFunction.js']) {
-            vm.runInContext(fs.readFileSync(path.join(PROJECT_ROOT, modulePath), 'utf-8'), this.context,
-                { timeout: this.timeout });
-        }
         if (profile) this._ensureBrowserEnvironment();
-        
+
         console.log('[SimpleSandbox] 沙箱初始化完成');
         return this;
-    }
-
-    /**
-     * 注入基础环境 - 只注入最基础的功能
-     */
-    _injectBaseEnvironment() {
-        // 不需要了，在 init 中已经创建好了
     }
 
     /**
      * 执行代码
      */
     execute(code, options = {}) {
-        const { enableLogging = true, timeout = this.timeout } = options;
+        const { timeout = this.timeout } = options;
         const startTime = Date.now();
 
         const success = (value) => ({
             success: true,
             result: this._serializeResult(value),
             duration: Date.now() - startTime,
-            consoleOutput: this.context.__consoleOutput__ || [],
+            consoleOutput: this.consoleOutput,
             accessLogs: this.accessLogs.slice(-50),
             callLogs: this.callLogs.slice(-50),
             undefinedPaths: []
@@ -143,73 +69,21 @@ export class SimpleSandbox {
             error: error.message,
             stack: error.stack,
             duration: Date.now() - startTime,
-            consoleOutput: this.context.__consoleOutput__ || [],
+            consoleOutput: this.consoleOutput,
             accessLogs: this.accessLogs.slice(-50),
             callLogs: this.callLogs.slice(-50),
             undefinedPaths: []
         });
-        
+
         try {
             // 清空日志
-            this.context.__consoleOutput__ = [];
+            this.consoleOutput = [];
             this.accessLogs = [];
             this.callLogs = [];
-            
-            // 如果启用日志，注入代理追踪代码
-            if (enableLogging) {
-                const proxyCode = `
-                    // 创建一个追踪 window 访问的代理
-                    (function() {
-                        const originalWindow = { ...window };
-                        const accessedPaths = new Set();
-                        
-                        // 包装 window 对象
-                        const handler = {
-                            get(target, prop) {
-                                if (prop === '__isProxy__') return true;
-                                
-                                const path = 'window.' + String(prop);
-                                if (!accessedPaths.has(path)) {
-                                    accessedPaths.add(path);
-                                    if (typeof __logAccess__ === 'function') {
-                                        __logAccess__(path, typeof target[prop]);
-                                    }
-                                }
-                                
-                                const value = target[prop];
-                                
-                                // 如果是函数，包装它以记录调用
-                                if (typeof value === 'function' && !value.__wrapped__) {
-                                    const wrapped = function(...args) {
-                                        const callPath = 'window.' + String(prop) + '()';
-                                        if (typeof __logCall__ === 'function') {
-                                            __logCall__(callPath, args.map(a => typeof a));
-                                        }
-                                        return value.apply(target, args);
-                                    };
-                                    wrapped.__wrapped__ = true;
-                                    Object.defineProperty(wrapped, 'name', { value: prop });
-                                    return wrapped;
-                                }
-                                
-                                return value;
-                            }
-                        };
-                        
-                        // 不能直接代理 window，但可以监控访问
-                        // 这里我们记录直接访问
-                    })();
-                `;
-                
-                try {
-                    vm.runInContext(proxyCode, this.context, { timeout });
-                } catch (e) {
-                    console.log('[SimpleSandbox] Proxy setup skipped:', e.message);
-                }
-            }
-            
-            // 使用 vm.runInContext 执行代码
+
             const result = vm.runInContext(code, this.context, {
+                // 默认文件名 evalmachine.<anonymous> 会出现在 error.stack 里，暴露 Node vm
+                filename: '<anonymous>',
                 timeout,
                 displayErrors: true
             });
@@ -247,17 +121,18 @@ export class SimpleSandbox {
                         return this.injectEnvironment(JSON.parse(code));
                     }
                     this._ensureBrowserEnvironment();
-                    vm.runInContext(code, this.context, { timeout: this.timeout });
+                    vm.runInContext(code, this.context, { timeout: this.timeout, filename: '<anonymous>' });
                 } else {
                     // 如果是代码字符串
-                    vm.runInContext(envData, this.context, { timeout: this.timeout });
+                    vm.runInContext(envData, this.context, { timeout: this.timeout, filename: '<anonymous>' });
                 }
             } else if (envData && typeof envData === 'object') {
                 this._ensureBrowserEnvironment();
                 vm.runInContext(`window.__applyCollectedEnvironment__(${JSON.stringify(envData)})`,
-                    this.context, { timeout: this.timeout });
+                    this.context, { timeout: this.timeout, filename: '<anonymous>' });
             }
-            vm.runInContext('window.__markBrowserFunctions__()', this.context, { timeout: this.timeout });
+            vm.runInContext('window.__markBrowserFunctions__()', this.context,
+                { timeout: this.timeout, filename: '<anonymous>' });
             return { success: true };
         } catch (e) {
             console.error('[SimpleSandbox] 注入环境失败:', e.message);
@@ -276,9 +151,12 @@ export class SimpleSandbox {
             }
             if (!fs.existsSync(fullPath)) throw new Error(`Environment module not found: ${file}`);
             if (!this.loadedEnvFiles.has(fullPath)) {
-                vm.runInContext(fs.readFileSync(fullPath, 'utf-8'), this.context, { timeout: this.timeout });
+                // 默认文件名 evalmachine.<anonymous> 会出现在 error.stack 里，暴露 Node vm
+                vm.runInContext(fs.readFileSync(fullPath, 'utf-8'), this.context,
+                    { timeout: this.timeout, filename: '<anonymous>' });
                 this.loadedEnvFiles.add(fullPath);
-                vm.runInContext('window.__markBrowserFunctions__()', this.context, { timeout: this.timeout });
+                vm.runInContext('window.__markBrowserFunctions__()', this.context,
+                    { timeout: this.timeout, filename: '<anonymous>' });
             }
             return { success: true, file: relative };
         } catch (error) {
@@ -303,19 +181,7 @@ export class SimpleSandbox {
             throw new TypeError('Page URL must use HTTP or HTTPS');
         }
         this._ensureBrowserEnvironment();
-        if (!this.htmlBridge) this.htmlBridge = createHtmlBridge();
-        Object.defineProperty(this.context, '__htmlBridge__', {
-            value: this.htmlBridge, writable: true, configurable: true
-        });
-        const tree = this.htmlBridge.parseDocument(html);
-        this.context.__parsedHTML__ = tree;
-        try {
-            vm.runInContext(`window.__loadHTML__(window.__parsedHTML__, ${JSON.stringify(pageURL || null)})`,
-                this.context, { timeout: this.timeout });
-        } finally {
-            delete this.context.__parsedHTML__;
-        }
-        return this.context.document;
+        return loadHTMLIntoContext(this.context, html, pageURL, this.timeout);
     }
 
     /**
@@ -344,6 +210,7 @@ export class SimpleSandbox {
     reset() {
         this.vm = null;
         this.undefinedPaths = [];
+        if (this.context) disposeBrowserContext(this.context);
         this.init({ profile: this.profile, timeout: this.timeout });
     }
 
@@ -372,7 +239,7 @@ export class SimpleSandbox {
         return {
             loadedEnvFiles: Array.from(this.loadedEnvFiles || []).map(file => path.relative(PROJECT_ROOT, file)),
             undefinedPaths: this.undefinedPaths,
-            consoleOutputCount: this.context?.__consoleOutput__?.length || 0,
+            consoleOutputCount: this.consoleOutput.length,
             ready: !!this.context,
             engine: 'Node.js VM'
         };
@@ -426,11 +293,10 @@ export class SimpleSandbox {
                     btoa: typeof btoa,
                     customProperties: Object.keys(window).filter(k => 
                         !['console', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 
-                         'atob', 'btoa', 'XMLHttpRequest', 'window', 'global', 'globalThis', 'self',
-                         '__consoleOutput__', '__undefinedPaths__', '__logAccess__', '__logCall__'].includes(k)
+                         'atob', 'btoa', 'XMLHttpRequest', 'window', 'globalThis', 'self'].includes(k)
                     )
                 })
-            `, this.context);
+            `, this.context, { filename: '<anonymous>' });
             return JSON.parse(envInfo);
         } catch (e) {
             return { error: e.message };
@@ -442,6 +308,8 @@ export class SimpleSandbox {
      */
     dispose() {
         this.vm = null;
+        // 取消尚未触发的定时器，避免被丢弃的上下文继续运行
+        if (this.context) disposeBrowserContext(this.context);
     }
 }
 

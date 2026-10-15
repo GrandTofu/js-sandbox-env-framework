@@ -165,7 +165,7 @@
                 id: this._generateId(),
                 timestamp: Date.now(),
                 tagName: tagName,
-                elementId: element.__id__,
+                elementId: window.__nodeIdOf__?.(element),
                 options: options,
                 attributes: {},
                 parent: null,
@@ -176,7 +176,7 @@
             this.logs.create.push(entry);
             
             // 存储元素引用
-            this.elements.created.set(element.__id__, element);
+            this.elements.created.set(window.__nodeIdOf__?.(element), element);
             
             // 按标签分类
             if (!this.elements.byTag.has(tagName.toUpperCase())) {
@@ -371,7 +371,7 @@
             if (typeof value === 'symbol') return value.toString();
             if (typeof value === 'object') {
                 try {
-                    if (value.__id__) return `[Element: ${value.tagName}#${value.__id__}]`;
+                    if (window.__nodeIdOf__?.(value)) return `[Element: ${value.tagName}#${window.__nodeIdOf__?.(value)}]`;
                     if (value instanceof Error) return `[Error: ${value.message}]`;
                     if (Array.isArray(value)) return `[Array(${value.length})]`;
                     if (value.nodeType) return `[Node: ${value.nodeName}]`;
@@ -543,7 +543,7 @@
             set: function(target, prop, value, receiver) {
                 __EnvMonitor__.log('Element', 'setProperty', {
                     tagName: tagName,
-                    elementId: target.__id__,
+                    elementId: window.__nodeIdOf__?.(target),
                     property: prop,
                     value: __EnvMonitor__._serializeValue(value)
                 });

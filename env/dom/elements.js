@@ -22,166 +22,50 @@
     // ==================== 获取基础类 ====================
     const Element = window.Element;
     const Node = window.Node;
-    
+    // document.js 的 HTMLElement 原型上定义了 style / dataset / offset* 访问器，本文件的 HTMLElement 会替换它，先取出来复用
+    const baseHTMLPrototype = window.HTMLElement && window.HTMLElement.prototype;
+    function copyAccessors(target, keys) {
+        if (!baseHTMLPrototype) return;
+        for (const key of keys) {
+            const descriptor = Object.getOwnPropertyDescriptor(baseHTMLPrototype, key);
+            if (descriptor) Object.defineProperty(target, key, descriptor);
+        }
+    }
+
     if (!Element) {
         console.error('[elements.js] Element class not found, please load document.js first');
         return;
     }
     
-    // ==================== 辅助函数 ====================
-    function createProxiedElement(element, elementType) {
-        const proxy = new Proxy(element, {
-            get: function(target, prop) {
-                if (typeof prop === 'symbol') return target[prop];
-                
-                // 检查 mock
-                const mockPath = `${elementType}.${prop}`;
-                if (Monitor.hasMock(mockPath)) {
-                    const mock = Monitor.getMock(mockPath);
-                    if (mock) {
-                        Monitor.log('Element', 'mockAccess', { type: elementType, prop });
-                        return mock.value;
-                    }
-                }
-                
-                const value = target[prop];
-                
-                // 记录 undefined 访问
-                if (value === undefined && !(prop in target)) {
-                    Monitor.logUndefined(`${elementType}.${prop}`, {
-                        tagName: target.tagName,
-                        elementId: target.__id__
-                    });
-                }
-                
-                // 包装方法调用
-                if (typeof value === 'function') {
-                    return function(...args) {
-                        Monitor.pushChain(`${elementType}.${prop}`);
-                        
-                        // 检查方法 mock
-                        const mockResult = Monitor.executeMock(`${elementType}.${prop}`, args, target);
-                        if (mockResult.mocked) {
-                            Monitor.popChain();
-                            return mockResult.result;
-                        }
-                        
-                        const result = value.apply(target, args);
-                        Monitor.logCall(`${elementType}.${prop}`, args, result, {
-                            tagName: target.tagName,
-                            elementId: target.__id__
-                        });
-                        Monitor.popChain();
-                        return result;
-                    };
-                }
-                
-                return value;
-            },
-            set: function(target, prop, value) {
-                Monitor.log('Element', 'setProperty', {
-                    type: elementType,
-                    prop: prop,
-                    value: Monitor._serializeValue ? Monitor._serializeValue(value) : value,
-                    tagName: target.tagName,
-                    elementId: target.__id__
-                });
-                target[prop] = value;
-                return true;
-            }
-        });
-        
-        return proxy;
-    }
-    
     // ==================== HTMLElement 基类 ====================
     function HTMLElement(tagName) {
         Element.call(this, tagName || 'div');
-        this.hidden = false;
-        this.title = '';
-        this.lang = '';
-        this.dir = '';
-        this.tabIndex = -1;
-        this.accessKey = '';
-        this.accessKeyLabel = '';
-        this.draggable = false;
-        this.spellcheck = true;
-        this.autocapitalize = '';
-        this.contentEditable = 'inherit';
-        this.isContentEditable = false;
-        this.inputMode = '';
-        this.enterKeyHint = '';
-        this.nonce = '';
-        this.autofocus = false;
-        this.inert = false;
-        
-        // 事件处理器
-        this.onclick = null;
-        this.ondblclick = null;
-        this.onmousedown = null;
-        this.onmouseup = null;
-        this.onmouseover = null;
-        this.onmouseout = null;
-        this.onmousemove = null;
-        this.onmouseenter = null;
-        this.onmouseleave = null;
-        this.onkeydown = null;
-        this.onkeyup = null;
-        this.onkeypress = null;
-        this.onfocus = null;
-        this.onblur = null;
-        this.onchange = null;
-        this.oninput = null;
-        this.onsubmit = null;
-        this.onreset = null;
-        this.onscroll = null;
-        this.onload = null;
-        this.onerror = null;
-        this.oncontextmenu = null;
-        this.ondrag = null;
-        this.ondragstart = null;
-        this.ondragend = null;
-        this.ondragover = null;
-        this.ondragenter = null;
-        this.ondragleave = null;
-        this.ondrop = null;
-        this.ontouchstart = null;
-        this.ontouchend = null;
-        this.ontouchmove = null;
-        this.ontouchcancel = null;
-        this.onpointerdown = null;
-        this.onpointerup = null;
-        this.onpointermove = null;
-        this.onpointerenter = null;
-        this.onpointerleave = null;
-        this.onpointercancel = null;
-        this.onanimationstart = null;
-        this.onanimationend = null;
-        this.onanimationiteration = null;
-        this.ontransitionend = null;
+        // title、lang、hidden、onclick 等是原型访问器（htmlElementAttributes.js）
     }
     
     HTMLElement.prototype = Object.create(Element.prototype);
     HTMLElement.prototype.constructor = HTMLElement;
-    
+    window.__htmlElementAttributes__.define(HTMLElement.prototype);
+    copyAccessors(HTMLElement.prototype, ['style', 'dataset', 'offsetParent', 'offsetTop', 'offsetLeft', 'offsetWidth', 'offsetHeight']);
+
     // HTMLElement 方法
     HTMLElement.prototype.click = function() {
-        Monitor.logCall('HTMLElement.click', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLElement.click', [], null, { elementId: window.__nodeIdOf__?.(this) });
         this.dispatchEvent(new Event('click', { bubbles: true, cancelable: true }));
     };
     
     HTMLElement.prototype.focus = function() {
-        Monitor.logCall('HTMLElement.focus', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLElement.focus', [], null, { elementId: window.__nodeIdOf__?.(this) });
         if (this.onfocus) this.onfocus(new Event('focus'));
     };
     
     HTMLElement.prototype.blur = function() {
-        Monitor.logCall('HTMLElement.blur', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLElement.blur', [], null, { elementId: window.__nodeIdOf__?.(this) });
         if (this.onblur) this.onblur(new Event('blur'));
     };
     
     HTMLElement.prototype.attachInternals = function() {
-        Monitor.logCall('HTMLElement.attachInternals', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLElement.attachInternals', [], null, { elementId: window.__nodeIdOf__?.(this) });
         return {
             form: null,
             labels: [],
@@ -195,7 +79,7 @@
         };
     };
     
-    window.HTMLElement = HTMLElement;
+    window.__elementInterfaces__.define(HTMLElement, "HTMLElement");
     
     // ==================== HTMLDivElement ====================
     function HTMLDivElement() {
@@ -204,7 +88,7 @@
     }
     HTMLDivElement.prototype = Object.create(HTMLElement.prototype);
     HTMLDivElement.prototype.constructor = HTMLDivElement;
-    window.HTMLDivElement = HTMLDivElement;
+    window.__elementInterfaces__.define(HTMLDivElement, "HTMLDivElement");
     
     // ==================== HTMLSpanElement ====================
     function HTMLSpanElement() {
@@ -212,7 +96,7 @@
     }
     HTMLSpanElement.prototype = Object.create(HTMLElement.prototype);
     HTMLSpanElement.prototype.constructor = HTMLSpanElement;
-    window.HTMLSpanElement = HTMLSpanElement;
+    window.__elementInterfaces__.define(HTMLSpanElement, "HTMLSpanElement");
     
     // ==================== HTMLParagraphElement ====================
     function HTMLParagraphElement() {
@@ -221,7 +105,7 @@
     }
     HTMLParagraphElement.prototype = Object.create(HTMLElement.prototype);
     HTMLParagraphElement.prototype.constructor = HTMLParagraphElement;
-    window.HTMLParagraphElement = HTMLParagraphElement;
+    window.__elementInterfaces__.define(HTMLParagraphElement, "HTMLParagraphElement");
     
     // ==================== HTMLHeadingElement (h1-h6) ====================
     function HTMLHeadingElement(level) {
@@ -230,21 +114,14 @@
     }
     HTMLHeadingElement.prototype = Object.create(HTMLElement.prototype);
     HTMLHeadingElement.prototype.constructor = HTMLHeadingElement;
-    window.HTMLHeadingElement = HTMLHeadingElement;
+    window.__elementInterfaces__.define(HTMLHeadingElement, "HTMLHeadingElement");
     
     // ==================== HTMLAnchorElement ====================
     function HTMLAnchorElement() {
         HTMLElement.call(this, 'a');
         this.href = '';
-        this.target = '';
-        this.download = '';
-        this.rel = '';
         this.relList = new DOMTokenList(this, 'rel');
-        this.hreflang = '';
-        this.type = '';
         this.text = '';
-        this.referrerPolicy = '';
-        this.ping = '';
         this.origin = '';
         this.protocol = '';
         this.username = '';
@@ -259,40 +136,31 @@
     HTMLAnchorElement.prototype = Object.create(HTMLElement.prototype);
     HTMLAnchorElement.prototype.constructor = HTMLAnchorElement;
     HTMLAnchorElement.prototype.toString = function() { return this.href; };
-    window.HTMLAnchorElement = HTMLAnchorElement;
+    window.__elementInterfaces__.define(HTMLAnchorElement, "HTMLAnchorElement");
     
     // ==================== HTMLImageElement ====================
     function HTMLImageElement() {
         HTMLElement.call(this, 'img');
         this.src = '';
-        this.srcset = '';
-        this.sizes = '';
-        this.alt = '';
-        this.crossOrigin = null;
-        this.useMap = '';
-        this.isMap = false;
         this.width = 0;
         this.height = 0;
         this.naturalWidth = 0;
         this.naturalHeight = 0;
         this.complete = true;
         this.currentSrc = '';
-        this.referrerPolicy = '';
-        this.decoding = 'auto';
-        this.loading = 'auto';
-        this.fetchPriority = 'auto';
         this.x = 0;
         this.y = 0;
     }
     HTMLImageElement.prototype = Object.create(HTMLElement.prototype);
     HTMLImageElement.prototype.constructor = HTMLImageElement;
     HTMLImageElement.prototype.decode = function() { 
-        Monitor.logCall('HTMLImageElement.decode', [], 'Promise', { elementId: this.__id__ });
+        Monitor.logCall('HTMLImageElement.decode', [], 'Promise', { elementId: window.__nodeIdOf__?.(this) });
         return Promise.resolve(); 
     };
-    window.HTMLImageElement = HTMLImageElement;
+    window.__elementInterfaces__.define(HTMLImageElement, "HTMLImageElement");
     window.Image = function(width, height) {
         const img = new HTMLImageElement();
+        liftOwnProperties(img);
         if (width !== undefined) img.width = width;
         if (height !== undefined) img.height = height;
         Monitor.logCreate('img', img, { width, height });
@@ -302,14 +170,10 @@
     // ==================== HTMLInputElement ====================
     function HTMLInputElement() {
         HTMLElement.call(this, 'input');
-        this.accept = '';
-        this.alt = '';
-        this.autocomplete = '';
         this.checked = false;
         this.defaultChecked = false;
         this.defaultValue = '';
         this.dirName = '';
-        this.disabled = false;
         this.files = null;
         this.form = null;
         this.formAction = '';
@@ -321,23 +185,10 @@
         this.indeterminate = false;
         this.labels = [];
         this.list = null;
-        this.max = '';
-        this.maxLength = -1;
-        this.min = '';
-        this.minLength = -1;
-        this.multiple = false;
-        this.name = '';
-        this.pattern = '';
-        this.placeholder = '';
-        this.readOnly = false;
-        this.required = false;
         this.selectionDirection = null;
         this.selectionEnd = null;
         this.selectionStart = null;
-        this.size = 20;
         this.src = '';
-        this.step = '';
-        this.type = 'text';
         this.validationMessage = '';
         this.validity = {
             badInput: false,
@@ -363,7 +214,7 @@
     HTMLInputElement.prototype.checkValidity = function() { return true; };
     HTMLInputElement.prototype.reportValidity = function() { return true; };
     HTMLInputElement.prototype.select = function() {
-        Monitor.logCall('HTMLInputElement.select', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLInputElement.select', [], null, { elementId: window.__nodeIdOf__?.(this) });
     };
     HTMLInputElement.prototype.setCustomValidity = function(message) {
         this.validationMessage = message;
@@ -381,24 +232,15 @@
     HTMLInputElement.prototype.stepDown = function(n) { };
     HTMLInputElement.prototype.stepUp = function(n) { };
     HTMLInputElement.prototype.showPicker = function() { };
-    window.HTMLInputElement = HTMLInputElement;
+    window.__elementInterfaces__.define(HTMLInputElement, "HTMLInputElement");
     
     // ==================== HTMLButtonElement ====================
     function HTMLButtonElement() {
         HTMLElement.call(this, 'button');
-        this.disabled = false;
         this.form = null;
-        this.formAction = '';
-        this.formEnctype = '';
-        this.formMethod = '';
-        this.formNoValidate = false;
-        this.formTarget = '';
         this.labels = [];
-        this.name = '';
-        this.type = 'submit';
         this.validationMessage = '';
         this.validity = { valid: true };
-        this.value = '';
         this.willValidate = true;
     }
     HTMLButtonElement.prototype = Object.create(HTMLElement.prototype);
@@ -406,23 +248,17 @@
     HTMLButtonElement.prototype.checkValidity = function() { return true; };
     HTMLButtonElement.prototype.reportValidity = function() { return true; };
     HTMLButtonElement.prototype.setCustomValidity = function(message) { };
-    window.HTMLButtonElement = HTMLButtonElement;
+    window.__elementInterfaces__.define(HTMLButtonElement, "HTMLButtonElement");
     
     // ==================== HTMLSelectElement ====================
     function HTMLSelectElement() {
         HTMLElement.call(this, 'select');
-        this.autocomplete = '';
-        this.disabled = false;
         this.form = null;
         this.labels = [];
         this.length = 0;
-        this.multiple = false;
-        this.name = '';
         this.options = [];
-        this.required = false;
         this.selectedIndex = -1;
         this.selectedOptions = [];
-        this.size = 0;
         this.type = 'select-one';
         this.validationMessage = '';
         this.validity = { valid: true };
@@ -446,25 +282,23 @@
     HTMLSelectElement.prototype.checkValidity = function() { return true; };
     HTMLSelectElement.prototype.reportValidity = function() { return true; };
     HTMLSelectElement.prototype.setCustomValidity = function(message) { };
-    window.HTMLSelectElement = HTMLSelectElement;
+    window.__elementInterfaces__.define(HTMLSelectElement, "HTMLSelectElement");
     
     // ==================== HTMLOptionElement ====================
     function HTMLOptionElement() {
         HTMLElement.call(this, 'option');
-        this.defaultSelected = false;
         this.disabled = false;
         this.form = null;
         this.index = 0;
-        this.label = '';
         this.selected = false;
         this.text = '';
-        this.value = '';
     }
     HTMLOptionElement.prototype = Object.create(HTMLElement.prototype);
     HTMLOptionElement.prototype.constructor = HTMLOptionElement;
-    window.HTMLOptionElement = HTMLOptionElement;
+    window.__elementInterfaces__.define(HTMLOptionElement, "HTMLOptionElement");
     window.Option = function(text, value, defaultSelected, selected) {
         const option = new HTMLOptionElement();
+        liftOwnProperties(option);
         if (text !== undefined) option.text = text;
         if (value !== undefined) option.value = value;
         if (defaultSelected !== undefined) option.defaultSelected = defaultSelected;
@@ -475,20 +309,10 @@
     // ==================== HTMLTextAreaElement ====================
     function HTMLTextAreaElement() {
         HTMLElement.call(this, 'textarea');
-        this.autocomplete = '';
-        this.cols = 20;
         this.defaultValue = '';
         this.dirName = '';
-        this.disabled = false;
         this.form = null;
         this.labels = [];
-        this.maxLength = -1;
-        this.minLength = -1;
-        this.name = '';
-        this.placeholder = '';
-        this.readOnly = false;
-        this.required = false;
-        this.rows = 2;
         this.selectionDirection = 'none';
         this.selectionEnd = 0;
         this.selectionStart = 0;
@@ -498,7 +322,6 @@
         this.validity = { valid: true };
         this.value = '';
         this.willValidate = true;
-        this.wrap = 'soft';
     }
     HTMLTextAreaElement.prototype = Object.create(HTMLElement.prototype);
     HTMLTextAreaElement.prototype.constructor = HTMLTextAreaElement;
@@ -512,126 +335,102 @@
         this.selectionEnd = end;
         this.selectionDirection = direction || 'none';
     };
-    window.HTMLTextAreaElement = HTMLTextAreaElement;
+    window.__elementInterfaces__.define(HTMLTextAreaElement, "HTMLTextAreaElement");
     
     // ==================== HTMLFormElement ====================
     function HTMLFormElement() {
         HTMLElement.call(this, 'form');
         this.acceptCharset = '';
-        this.action = '';
         this.autocomplete = 'on';
         this.elements = [];
         this.encoding = '';
-        this.enctype = 'application/x-www-form-urlencoded';
         this.length = 0;
-        this.method = 'get';
-        this.name = '';
-        this.noValidate = false;
-        this.target = '';
+        this.enctype = 'application/x-www-form-urlencoded';
     }
     HTMLFormElement.prototype = Object.create(HTMLElement.prototype);
     HTMLFormElement.prototype.constructor = HTMLFormElement;
     HTMLFormElement.prototype.checkValidity = function() { return true; };
     HTMLFormElement.prototype.reportValidity = function() { return true; };
     HTMLFormElement.prototype.reset = function() {
-        Monitor.logCall('HTMLFormElement.reset', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLFormElement.reset', [], null, { elementId: window.__nodeIdOf__?.(this) });
         if (this.onreset) this.onreset(new Event('reset'));
     };
     HTMLFormElement.prototype.submit = function() {
-        Monitor.logCall('HTMLFormElement.submit', [], null, { elementId: this.__id__ });
+        Monitor.logCall('HTMLFormElement.submit', [], null, { elementId: window.__nodeIdOf__?.(this) });
         if (this.onsubmit) this.onsubmit(new Event('submit'));
     };
     HTMLFormElement.prototype.requestSubmit = function(submitter) {
         Monitor.logCall('HTMLFormElement.requestSubmit', [submitter], null);
         if (this.onsubmit) this.onsubmit(new Event('submit'));
     };
-    window.HTMLFormElement = HTMLFormElement;
+    window.__elementInterfaces__.define(HTMLFormElement, "HTMLFormElement");
     
     // ==================== HTMLLabelElement ====================
     function HTMLLabelElement() {
         HTMLElement.call(this, 'label');
-        this.control = null;
-        this.form = null;
-        this.htmlFor = '';
     }
     HTMLLabelElement.prototype = Object.create(HTMLElement.prototype);
     HTMLLabelElement.prototype.constructor = HTMLLabelElement;
-    window.HTMLLabelElement = HTMLLabelElement;
+    // htmlFor 是反射字符串属性（不是 token list），control / form 由 DOM 关系推导
+    reflectString(HTMLLabelElement.prototype, 'htmlFor', 'for');
+    Object.defineProperty(HTMLLabelElement.prototype, 'control', {
+        get() {
+            const id = this.getAttribute('for');
+            if (!id) return null;
+            const owner = this.ownerDocument || window.document;
+            return owner.getElementById(id);
+        },
+        enumerable: true, configurable: true
+    });
+    Object.defineProperty(HTMLLabelElement.prototype, 'form', {
+        get() { return typeof this.closest === 'function' ? this.closest('form') : null; },
+        enumerable: true, configurable: true
+    });
+    window.__elementInterfaces__.define(HTMLLabelElement, "HTMLLabelElement");
     
     // ==================== HTMLScriptElement ====================
     function HTMLScriptElement() {
         HTMLElement.call(this, 'script');
-        this.async = false;
-        this.blocking = '';
         this.charset = '';
-        this.crossOrigin = null;
-        this.defer = false;
         this.event = '';
-        this.fetchPriority = 'auto';
-        this.htmlFor = '';
-        this.integrity = '';
-        this.noModule = false;
-        this.referrerPolicy = '';
-        this.src = '';
         this.text = '';
-        this.type = '';
     }
     HTMLScriptElement.prototype = Object.create(HTMLElement.prototype);
     HTMLScriptElement.prototype.constructor = HTMLScriptElement;
     HTMLScriptElement.supports = function(type) {
         return type === 'classic' || type === 'module' || type === 'importmap';
     };
-    window.HTMLScriptElement = HTMLScriptElement;
+    window.__elementInterfaces__.define(HTMLScriptElement, "HTMLScriptElement");
     
     // ==================== HTMLStyleElement ====================
     function HTMLStyleElement() {
         HTMLElement.call(this, 'style');
-        this.disabled = false;
-        this.media = '';
         this.type = 'text/css';
-        this.sheet = null;
+        // disabled / media / sheet 由 cssom.js 提供（sheet 是只读访问器）
     }
     HTMLStyleElement.prototype = Object.create(HTMLElement.prototype);
     HTMLStyleElement.prototype.constructor = HTMLStyleElement;
-    window.HTMLStyleElement = HTMLStyleElement;
+    window.__elementInterfaces__.define(HTMLStyleElement, "HTMLStyleElement");
     
     // ==================== HTMLLinkElement ====================
     function HTMLLinkElement() {
         HTMLElement.call(this, 'link');
-        this.as = '';
-        this.blocking = '';
-        this.crossOrigin = null;
-        this.disabled = false;
-        this.fetchPriority = 'auto';
         this.href = '';
-        this.hreflang = '';
-        this.imageSizes = '';
-        this.imageSrcset = '';
-        this.integrity = '';
-        this.media = '';
-        this.referrerPolicy = '';
-        this.rel = '';
         this.relList = new DOMTokenList(this, 'rel');
-        this.sheet = null;
-        this.sizes = '';
-        this.type = '';
+        // sheet 由 cssom.js 提供（只读访问器）
     }
     HTMLLinkElement.prototype = Object.create(HTMLElement.prototype);
     HTMLLinkElement.prototype.constructor = HTMLLinkElement;
-    window.HTMLLinkElement = HTMLLinkElement;
+    window.__elementInterfaces__.define(HTMLLinkElement, "HTMLLinkElement");
     
     // ==================== HTMLMetaElement ====================
     function HTMLMetaElement() {
         HTMLElement.call(this, 'meta');
-        this.content = '';
-        this.httpEquiv = '';
-        this.media = '';
-        this.name = '';
         this.scheme = '';
     }
     HTMLMetaElement.prototype = Object.create(HTMLElement.prototype);
     HTMLMetaElement.prototype.constructor = HTMLMetaElement;
-    window.HTMLMetaElement = HTMLMetaElement;
+    window.__elementInterfaces__.define(HTMLMetaElement, "HTMLMetaElement");
     
     // ==================== HTMLTitleElement ====================
     function HTMLTitleElement() {
@@ -640,80 +439,212 @@
     }
     HTMLTitleElement.prototype = Object.create(HTMLElement.prototype);
     HTMLTitleElement.prototype.constructor = HTMLTitleElement;
-    window.HTMLTitleElement = HTMLTitleElement;
+    window.__elementInterfaces__.define(HTMLTitleElement, "HTMLTitleElement");
     
     // ==================== HTMLBaseElement ====================
     function HTMLBaseElement() {
         HTMLElement.call(this, 'base');
         this.href = '';
-        this.target = '';
     }
     HTMLBaseElement.prototype = Object.create(HTMLElement.prototype);
     HTMLBaseElement.prototype.constructor = HTMLBaseElement;
-    window.HTMLBaseElement = HTMLBaseElement;
+    window.__elementInterfaces__.define(HTMLBaseElement, "HTMLBaseElement");
     
+    // ==================== Canvas 对象类型 ====================
+    const canvasIdl = window.__webidl__;
+
+    canvasIdl.defineInterface('ImageData', {
+        length: 1,
+        construct(first, second, third) {
+            let data;
+            let width;
+            let height;
+            if (typeof first === 'number') {
+                width = Math.trunc(first);
+                height = second === undefined ? 0 : Math.trunc(second);
+                if (width <= 0 || height <= 0) {
+                    throw new DOMException("Failed to construct 'ImageData': The source width is zero or not a number.", 'IndexSizeError');
+                }
+                data = new Uint8ClampedArray(width * height * 4);
+            } else if (first && first.buffer) {
+                data = first;
+                width = Math.trunc(second);
+                height = Math.trunc(third);
+                if (data.length !== width * height * 4) {
+                    throw new DOMException("Failed to construct 'ImageData': The input data length is not equal to (4 * width * height).", 'IndexSizeError');
+                }
+            } else {
+                throw new TypeError("Failed to construct 'ImageData': Overload resolution failed.");
+            }
+            Object.assign(canvasIdl.internal(this), { data, width, height, colorSpace: 'srgb' });
+        },
+        attributes: {
+            data() { return canvasIdl.internal(this).data; },
+            width() { return canvasIdl.internal(this).width; },
+            height() { return canvasIdl.internal(this).height; },
+            colorSpace() { return canvasIdl.internal(this).colorSpace; }
+        }
+    });
+
+    canvasIdl.defineInterface('CanvasGradient', {
+        methods: {
+            addColorStop(offset, color) {
+                const value = Number(offset);
+                if (!(value >= 0 && value <= 1)) {
+                    throw new DOMException("Failed to execute 'addColorStop' on 'CanvasGradient': The provided value is outside the range [0, 1].", 'IndexSizeError');
+                }
+                canvasIdl.internal(this).stops.push([value, String(color)]);
+            }
+        }
+    });
+
+    canvasIdl.defineInterface('CanvasPattern', {
+        methods: { setTransform(transform = {}) {} }
+    });
+
+    const textMetricKeys = ['width', 'actualBoundingBoxLeft', 'actualBoundingBoxRight',
+        'actualBoundingBoxAscent', 'actualBoundingBoxDescent', 'fontBoundingBoxAscent',
+        'fontBoundingBoxDescent', 'emHeightAscent', 'emHeightDescent',
+        'hangingBaseline', 'alphabeticBaseline', 'ideographicBaseline'];
+    const textMetricsAttributes = {};
+    for (const key of textMetricKeys) {
+        textMetricsAttributes[key] = function() { return canvasIdl.internal(this)[key]; };
+    }
+    canvasIdl.defineInterface('TextMetrics', { attributes: textMetricsAttributes });
+
+    function imageDataOf(data, width, height) {
+        return canvasIdl.create('ImageData', { data, width, height, colorSpace: 'srgb' });
+    }
+
+    function textMetricsOf(width) {
+        return canvasIdl.create('TextMetrics', {
+            width, actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 2,
+            actualBoundingBoxLeft: 0, actualBoundingBoxRight: width,
+            fontBoundingBoxAscent: 12, fontBoundingBoxDescent: 3,
+            emHeightAscent: 10, emHeightDescent: 2,
+            hangingBaseline: 10, alphabeticBaseline: 0, ideographicBaseline: -2
+        });
+    }
+
+    function canvasGradient() { return canvasIdl.create('CanvasGradient', { stops: [] }); }
+    function canvasPattern() { return canvasIdl.create('CanvasPattern', {}); }
+
     // ==================== HTMLCanvasElement ====================
+    // 上下文对象存放在 WeakMap 中，不在实例上留下 _context2d 等字段；一个 canvas 只允许一种上下文
+    const canvasContexts = new WeakMap();
+    function contextsOf(canvas) {
+        if (!(canvas instanceof HTMLCanvasElement)) throw new TypeError('Illegal invocation');
+        let contexts = canvasContexts.get(canvas);
+        if (!contexts) {
+            contexts = { kind: null, context: null };
+            canvasContexts.set(canvas, contexts);
+        }
+        return contexts;
+    }
+
     function HTMLCanvasElement() {
         HTMLElement.call(this, 'canvas');
-        this.width = 300;
-        this.height = 150;
-        this._context2d = null;
-        this._contextWebGL = null;
-
-        var self = this;
-
-        this.getContext = function(contextId, options) {
-            Monitor.logCall('HTMLCanvasElement.getContext', [contextId, options], '[Context]', { elementId: self.__id__ });
-            var mock = Monitor.executeMock('HTMLCanvasElement.getContext', [contextId, options], self);
-            if (mock.mocked) return mock.result;
-
-            if (contextId === '2d') {
-                if (!self._context2d) self._context2d = new CanvasRenderingContext2D(self);
-                return self._context2d;
-            }
-            if (contextId === 'webgl' || contextId === 'experimental-webgl') {
-                if (!self._contextWebGL) self._contextWebGL = new WebGLRenderingContext(self);
-                return self._contextWebGL;
-            }
-            if (contextId === 'webgl2') {
-                return new WebGL2RenderingContext(self);
-            }
-            return null;
-        };
-
-        this.toDataURL = function(type, quality) {
-            Monitor.logCall('HTMLCanvasElement.toDataURL', [type, quality], 'data:image/png;base64,...');
-            var mock = Monitor.executeMock('HTMLCanvasElement.toDataURL', [type, quality], self);
-            if (mock.mocked) return mock.result;
-            var canvasProfile = window.__profile__ && window.__profile__.canvas;
-            if (canvasProfile && canvasProfile.toDataURL) return canvasProfile.toDataURL;
-            return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-        };
-
-        this.toBlob = function(callback, type, quality) {
-            Monitor.logCall('HTMLCanvasElement.toBlob', [callback, type, quality], null);
-            var mock = Monitor.executeMock('HTMLCanvasElement.toBlob', [callback, type, quality], self);
-            if (mock.mocked) { if (callback) callback(mock.result); return; }
-            if (callback) callback(new Blob([''], { type: type || 'image/png' }));
-        };
-
-        this.captureStream = function(frameRate) {
-            Monitor.logCall('HTMLCanvasElement.captureStream', [frameRate], '[MediaStream]');
-            return {};
-        };
-
-        this.transferControlToOffscreen = function() {
-            Monitor.logCall('HTMLCanvasElement.transferControlToOffscreen', [], '[OffscreenCanvas]');
-            return {};
-        };
     }
     HTMLCanvasElement.prototype = Object.create(HTMLElement.prototype);
     HTMLCanvasElement.prototype.constructor = HTMLCanvasElement;
+
+    // width / height 反射同名属性，缺省或非法时为 300 / 150
+    function canvasDimension(name, fallback) {
+        const holder = {
+            get [name]() {
+                contextsOf(this);
+                const value = parseInt(this.getAttribute(name) ?? '', 10);
+                return Number.isNaN(value) || value < 0 ? fallback : value;
+            },
+            set [name](value) {
+                contextsOf(this);
+                const number = Math.trunc(Number(value));
+                this.setAttribute(name, String(Number.isFinite(number) && number >= 0 ? number : fallback));
+            }
+        };
+        const descriptor = Object.getOwnPropertyDescriptor(holder, name);
+        Object.defineProperty(HTMLCanvasElement.prototype, name, {
+            get: window.safefunction(descriptor.get, 'get ' + name),
+            set: window.safefunction(descriptor.set, 'set ' + name),
+            enumerable: true, configurable: true
+        });
+    }
+    canvasDimension('width', 300);
+    canvasDimension('height', 150);
+
+    const canvasMethods = {
+        getContext(contextId, options) {
+            const contexts = contextsOf(this);
+            if (arguments.length < 1) {
+                throw new TypeError("Failed to execute 'getContext' on 'HTMLCanvasElement': 1 argument required, but only 0 present.");
+            }
+            Monitor.logCall('HTMLCanvasElement.getContext', [contextId, options], '[Context]', { elementId: window.__nodeIdOf__?.(this) });
+            const mock = Monitor.executeMock('HTMLCanvasElement.getContext', [contextId, options], this);
+            if (mock.mocked) return mock.result;
+            const id = String(contextId);
+            // webgl / experimental-webgl 是同一上下文；canvas 一旦有某类上下文，再取其它类型返回 null
+            const kind = id === 'experimental-webgl' ? 'webgl' : id;
+            if (contexts.kind && contexts.kind !== kind) return null;
+            if (contexts.context) return contexts.context;
+            let context = null;
+            if (kind === '2d') context = new CanvasRenderingContext2D(this, contextToken);
+            else if (kind === 'webgl' || kind === 'webgl2') {
+                context = window.__webglInternals__.createContext(this, kind, options);
+            }
+            if (!context) return null;
+            contexts.kind = kind;
+            contexts.context = context;
+            return context;
+        },
+        toDataURL(type, quality) {
+            contextsOf(this);
+            Monitor.logCall('HTMLCanvasElement.toDataURL', [type, quality], 'data:image/png;base64,...');
+            const mock = Monitor.executeMock('HTMLCanvasElement.toDataURL', [type, quality], this);
+            if (mock.mocked) return mock.result;
+            const canvasProfile = window.__profile__ && window.__profile__.canvas;
+            if (canvasProfile && canvasProfile.toDataURL) return canvasProfile.toDataURL;
+            return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+        },
+        toBlob(callback, type, quality) {
+            contextsOf(this);
+            if (typeof callback !== 'function') {
+                throw new TypeError("Failed to execute 'toBlob' on 'HTMLCanvasElement': parameter 1 is not of type 'Function'.");
+            }
+            Monitor.logCall('HTMLCanvasElement.toBlob', [callback, type, quality], null);
+            const mock = Monitor.executeMock('HTMLCanvasElement.toBlob', [callback, type, quality], this);
+            if (mock.mocked) { callback(mock.result); return; }
+            callback(new Blob([''], { type: type || 'image/png' }));
+        },
+        captureStream(frameRate) {
+            contextsOf(this);
+            Monitor.logCall('HTMLCanvasElement.captureStream', [frameRate], '[MediaStream]');
+            return {};
+        },
+        transferControlToOffscreen() {
+            contextsOf(this);
+            Monitor.logCall('HTMLCanvasElement.transferControlToOffscreen', [], '[OffscreenCanvas]');
+            return {};
+        }
+    };
+    const canvasMethodLengths = { getContext: 1, toDataURL: 0, toBlob: 1, captureStream: 0, transferControlToOffscreen: 0 };
+    for (const [key, method] of Object.entries(canvasMethods)) {
+        Object.defineProperty(method, 'length', { value: canvasMethodLengths[key] });
+        Object.defineProperty(HTMLCanvasElement.prototype, key, {
+            value: window.safefunction(method, key), writable: true, enumerable: true, configurable: true
+        });
+    }
     
-    window.HTMLCanvasElement = HTMLCanvasElement;
+    window.__elementInterfaces__.define(HTMLCanvasElement, "HTMLCanvasElement");
     
+    // 上下文只能由 getContext 创建：脚本直接 new 时缺少内部令牌，抛 Illegal constructor
+    const contextToken = {};
+    function checkContextToken(token) {
+        if (token !== contextToken) throw new TypeError('Illegal constructor');
+    }
+
     // ==================== CanvasRenderingContext2D ====================
-    function CanvasRenderingContext2D(canvas) {
+    function CanvasRenderingContext2D(canvas, token) {
+        checkContextToken(token);
         this.canvas = canvas;
 
         // 状态
@@ -745,7 +676,7 @@
         var self = this;
 
         this.getImageData = function(sx, sy, sw, sh) {
-            Monitor.logCall('CanvasRenderingContext2D.getImageData', [sx, sy, sw, sh], null, { canvasId: canvas.__id__ });
+            Monitor.logCall('CanvasRenderingContext2D.getImageData', [sx, sy, sw, sh], null, { canvasId: window.__nodeIdOf__?.(canvas) });
             var mock = Monitor.executeMock('CanvasRenderingContext2D.getImageData', [sx, sy, sw, sh], self);
             if (mock.mocked) return mock.result;
             var width = sw || 1;
@@ -759,28 +690,21 @@
                     data[i] = (s >>> 24) & 0xFF;
                 }
             }
-            return { data: data, width: width, height: height, colorSpace: 'srgb' };
+            return imageDataOf(data, width, height);
         };
 
         this.measureText = function(text) {
-            Monitor.logCall('CanvasRenderingContext2D.measureText', [text], null, { canvasId: canvas.__id__ });
+            Monitor.logCall('CanvasRenderingContext2D.measureText', [text], null, { canvasId: window.__nodeIdOf__?.(canvas) });
             var mock = Monitor.executeMock('CanvasRenderingContext2D.measureText', [text], self);
             if (mock.mocked) return mock.result;
             var w = (text ? text.length : 0) * 8;
-            return {
-                width: w,
-                actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 2,
-                actualBoundingBoxLeft: 0, actualBoundingBoxRight: w,
-                fontBoundingBoxAscent: 12, fontBoundingBoxDescent: 3,
-                emHeightAscent: 10, emHeightDescent: 2,
-                hangingBaseline: 10, alphabeticBaseline: 0, ideographicBaseline: -2
-            };
+            return textMetricsOf(w);
         };
 
         this.createImageData = function(widthOrData, height) {
             var w = typeof widthOrData === 'number' ? widthOrData : (widthOrData ? widthOrData.width : 1);
             var h = typeof height === 'number' ? height : (widthOrData ? widthOrData.height : 1);
-            return { data: new Uint8ClampedArray(w * h * 4), width: w, height: h, colorSpace: 'srgb' };
+            return imageDataOf(new Uint8ClampedArray(w * h * 4), w, h);
         };
 
         this.isPointInPath = function() { return false; };
@@ -791,6 +715,9 @@
         this.getContextAttributes = function() {
             return { alpha: true, colorSpace: 'srgb', desynchronized: false, willReadFrequently: false };
         };
+
+        // 实例不留自有属性（与浏览器一致）
+        window.__elementProps__?.lift(this);
     }
     
     // Canvas 2D 方法
@@ -809,7 +736,7 @@
     context2dMethods.forEach(method => {
         CanvasRenderingContext2D.prototype[method] = function(...args) {
             Monitor.logCall(`CanvasRenderingContext2D.${method}`, args, null, {
-                canvasId: this.canvas?.__id__
+                canvasId: window.__nodeIdOf__?.(this.canvas)
             });
             
             const mock = Monitor.executeMock(`CanvasRenderingContext2D.${method}`, args, this);
@@ -817,20 +744,7 @@
             
             // 特殊处理某些方法
             if (method === 'measureText') {
-                return {
-                    width: args[0]?.length * 8 || 0,
-                    actualBoundingBoxAscent: 10,
-                    actualBoundingBoxDescent: 2,
-                    actualBoundingBoxLeft: 0,
-                    actualBoundingBoxRight: args[0]?.length * 8 || 0,
-                    fontBoundingBoxAscent: 12,
-                    fontBoundingBoxDescent: 3,
-                    emHeightAscent: 10,
-                    emHeightDescent: 2,
-                    hangingBaseline: 10,
-                    alphabeticBaseline: 0,
-                    ideographicBaseline: -2
-                };
+                return textMetricsOf(args[0]?.length * 8 || 0);
             }
             if (method === 'getImageData') {
                 const width = args[2] || 1;
@@ -844,30 +758,18 @@
                         data[i] = (s >>> 24) & 0xFF;
                     }
                 }
-                return {
-                    data: data,
-                    width: width,
-                    height: height,
-                    colorSpace: 'srgb'
-                };
+                return imageDataOf(data, width, height);
             }
             if (method === 'createImageData') {
                 const width = typeof args[0] === 'number' ? args[0] : args[0]?.width || 1;
                 const height = typeof args[1] === 'number' ? args[1] : args[0]?.height || 1;
-                return {
-                    data: new Uint8ClampedArray(width * height * 4),
-                    width: width,
-                    height: height,
-                    colorSpace: 'srgb'
-                };
+                return imageDataOf(new Uint8ClampedArray(width * height * 4), width, height);
             }
             if (method === 'createLinearGradient' || method === 'createRadialGradient' || method === 'createConicGradient') {
-                return {
-                    addColorStop: function() {}
-                };
+                return canvasGradient();
             }
             if (method === 'createPattern') {
-                return {};
+                return canvasPattern();
             }
             if (method === 'save') {
                 this._stateStack.push({});
@@ -904,276 +806,14 @@
     
     window.CanvasRenderingContext2D = CanvasRenderingContext2D;
     
-    // ==================== WebGLRenderingContext ====================
-    function WebGLRenderingContext(canvas) {
-        this.canvas = canvas;
-        this.drawingBufferWidth = canvas.width;
-        this.drawingBufferHeight = canvas.height;
-        this.drawingBufferColorSpace = 'srgb';
+    // CanvasRenderingContext2D 的 toStringTag（WebGL 上下文由 webgl.js 定义）
+    Object.defineProperty(CanvasRenderingContext2D.prototype, Symbol.toStringTag,
+        { value: 'CanvasRenderingContext2D', configurable: true });
 
-        // WebGL 常量
-        this.DEPTH_BUFFER_BIT = 0x00000100;
-        this.STENCIL_BUFFER_BIT = 0x00000400;
-        this.COLOR_BUFFER_BIT = 0x00004000;
-        this.POINTS = 0x0000;
-        this.LINES = 0x0001;
-        this.LINE_LOOP = 0x0002;
-        this.LINE_STRIP = 0x0003;
-        this.TRIANGLES = 0x0004;
-        this.TRIANGLE_STRIP = 0x0005;
-        this.TRIANGLE_FAN = 0x0006;
-        this.VENDOR = 7936;
-        this.RENDERER = 7937;
-        this.VERSION = 7938;
-        this.SHADING_LANGUAGE_VERSION = 35724;
-        this._debugEnabled = false;
-        // ... 更多常量
-
-        // 直接在实例上定义关键方法（避免 Proxy 导致原型链断裂）
-        var self = this;
-
-        this.getParameter = function(pname) {
-            Monitor.logCall('WebGLRenderingContext.getParameter', [pname], null, { canvasId: canvas.__id__ });
-            var mock = Monitor.executeMock('WebGLRenderingContext.getParameter', [pname], self);
-            if (mock.mocked) return mock.result;
-            var glProfile = window.__profile__ && window.__profile__.webgl;
-            if ((pname === 37445 || pname === 37446) && !self._debugEnabled) return null;
-            if (glProfile && glProfile.parameters) {
-                var val = glProfile.parameters[String(pname)];
-                if (val !== undefined) return val;
-            }
-            var fields = { 7936: 'vendor', 7937: 'renderer', 7938: 'version',
-                35724: 'shadingLanguageVersion', 37445: 'unmaskedVendor',
-                37446: 'unmaskedRenderer' };
-            if (glProfile && fields[pname] && glProfile[fields[pname]] !== undefined) {
-                return glProfile[fields[pname]];
-            }
-            return null;
-        };
-
-        this.getSupportedExtensions = function() {
-            Monitor.logCall('WebGLRenderingContext.getSupportedExtensions', [], null, { canvasId: canvas.__id__ });
-            var mock = Monitor.executeMock('WebGLRenderingContext.getSupportedExtensions', [], self);
-            if (mock.mocked) return mock.result;
-            var glProfile = window.__profile__ && window.__profile__.webgl;
-            if (glProfile && glProfile.extensions) return glProfile.extensions.slice();
-            return [];
-        };
-
-        this.getExtension = function(name) {
-            Monitor.logCall('WebGLRenderingContext.getExtension', [name], null, { canvasId: canvas.__id__ });
-            var mock = Monitor.executeMock('WebGLRenderingContext.getExtension', [name], self);
-            if (mock.mocked) return mock.result;
-            var glProfile = window.__profile__ && window.__profile__.webgl;
-            if (glProfile && glProfile.extensions) {
-                if (!glProfile.extensions.includes(name)) return null;
-                if (name === 'WEBGL_debug_renderer_info') {
-                    self._debugEnabled = true;
-                    return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
-                }
-                if (name === 'WEBGL_lose_context') {
-                    return { loseContext: function() {}, restoreContext: function() {} };
-                }
-                if (name === 'OES_vertex_array_object') {
-                    return {
-                        VERTEX_ARRAY_BINDING_OES: 34229,
-                        createVertexArrayOES: function() { return { __type__: 'WebGLVertexArrayObject' }; },
-                        deleteVertexArrayOES: function() {},
-                        isVertexArrayOES: function() { return false; },
-                        bindVertexArrayOES: function() {}
-                    };
-                }
-                if (name === 'ANGLE_instanced_arrays') {
-                    return {
-                        VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE: 35070,
-                        drawArraysInstancedANGLE: function() {},
-                        drawElementsInstancedANGLE: function() {},
-                        vertexAttribDivisorANGLE: function() {}
-                    };
-                }
-                return {};
-            }
-            return null;
-        };
-
-        this.getShaderPrecisionFormat = function(shaderType, precisionType) {
-            Monitor.logCall('WebGLRenderingContext.getShaderPrecisionFormat', [shaderType, precisionType], null);
-            return { rangeMin: 127, rangeMax: 127, precision: 23 };
-        };
-
-        this.getContextAttributes = function() {
-            return {
-                alpha: true, antialias: true, depth: true, desynchronized: false,
-                failIfMajorPerformanceCaveat: false, powerPreference: 'default',
-                premultipliedAlpha: true, preserveDrawingBuffer: false,
-                stencil: false, xrCompatible: false
-            };
-        };
-
-        this.getError = function() { return 0; };
-        this.isContextLost = function() { return false; };
-        this.getShaderParameter = function() { return true; };
-        this.getProgramParameter = function() { return true; };
-        this.getShaderInfoLog = function() { return ''; };
-        this.getProgramInfoLog = function() { return ''; };
-        this.getAttribLocation = function() { return 0; };
-        this.getUniformLocation = function() { return { __type__: 'WebGLUniformLocation' }; };
-        this.createShader = function() { return { __type__: 'WebGLShader' }; };
-        this.createProgram = function() { return { __type__: 'WebGLProgram' }; };
-        this.createBuffer = function() { return { __type__: 'WebGLBuffer' }; };
-        this.createTexture = function() { return { __type__: 'WebGLTexture' }; };
-        this.createFramebuffer = function() { return { __type__: 'WebGLFramebuffer' }; };
-        this.createRenderbuffer = function() { return { __type__: 'WebGLRenderbuffer' }; };
-    }
-    
-    // WebGL 方法
-    const webglMethods = [
-        'activeTexture', 'attachShader', 'bindAttribLocation', 'bindBuffer',
-        'bindFramebuffer', 'bindRenderbuffer', 'bindTexture', 'blendColor',
-        'blendEquation', 'blendEquationSeparate', 'blendFunc', 'blendFuncSeparate',
-        'bufferData', 'bufferSubData', 'checkFramebufferStatus', 'clear',
-        'clearColor', 'clearDepth', 'clearStencil', 'colorMask', 'compileShader',
-        'compressedTexImage2D', 'compressedTexSubImage2D', 'copyTexImage2D',
-        'copyTexSubImage2D', 'createBuffer', 'createFramebuffer', 'createProgram',
-        'createRenderbuffer', 'createShader', 'createTexture', 'cullFace',
-        'deleteBuffer', 'deleteFramebuffer', 'deleteProgram', 'deleteRenderbuffer',
-        'deleteShader', 'deleteTexture', 'depthFunc', 'depthMask', 'depthRange',
-        'detachShader', 'disable', 'disableVertexAttribArray', 'drawArrays',
-        'drawElements', 'enable', 'enableVertexAttribArray', 'finish', 'flush',
-        'framebufferRenderbuffer', 'framebufferTexture2D', 'frontFace',
-        'generateMipmap', 'getActiveAttrib', 'getActiveUniform', 'getAttachedShaders',
-        'getAttribLocation', 'getBufferParameter', 'getContextAttributes', 'getError',
-        'getExtension', 'getFramebufferAttachmentParameter', 'getParameter',
-        'getProgramInfoLog', 'getProgramParameter', 'getRenderbufferParameter',
-        'getShaderInfoLog', 'getShaderParameter', 'getShaderPrecisionFormat',
-        'getShaderSource', 'getSupportedExtensions', 'getTexParameter',
-        'getUniform', 'getUniformLocation', 'getVertexAttrib', 'getVertexAttribOffset',
-        'hint', 'isBuffer', 'isContextLost', 'isEnabled', 'isFramebuffer',
-        'isProgram', 'isRenderbuffer', 'isShader', 'isTexture', 'lineWidth',
-        'linkProgram', 'pixelStorei', 'polygonOffset', 'readPixels',
-        'renderbufferStorage', 'sampleCoverage', 'scissor', 'shaderSource',
-        'stencilFunc', 'stencilFuncSeparate', 'stencilMask', 'stencilMaskSeparate',
-        'stencilOp', 'stencilOpSeparate', 'texImage2D', 'texParameterf',
-        'texParameteri', 'texSubImage2D', 'uniform1f', 'uniform1fv', 'uniform1i',
-        'uniform1iv', 'uniform2f', 'uniform2fv', 'uniform2i', 'uniform2iv',
-        'uniform3f', 'uniform3fv', 'uniform3i', 'uniform3iv', 'uniform4f',
-        'uniform4fv', 'uniform4i', 'uniform4iv', 'uniformMatrix2fv',
-        'uniformMatrix3fv', 'uniformMatrix4fv', 'useProgram', 'validateProgram',
-        'vertexAttrib1f', 'vertexAttrib1fv', 'vertexAttrib2f', 'vertexAttrib2fv',
-        'vertexAttrib3f', 'vertexAttrib3fv', 'vertexAttrib4f', 'vertexAttrib4fv',
-        'vertexAttribPointer', 'viewport'
-    ];
-    
-    webglMethods.forEach(method => {
-        WebGLRenderingContext.prototype[method] = function(...args) {
-            Monitor.logCall(`WebGLRenderingContext.${method}`, args, null, {
-                canvasId: this.canvas?.__id__
-            });
-            
-            const mock = Monitor.executeMock(`WebGLRenderingContext.${method}`, args, this);
-            if (mock.mocked) return mock.result;
-            
-            // 特殊处理
-            if (method === 'createShader') return { __type__: 'WebGLShader' };
-            if (method === 'createProgram') return { __type__: 'WebGLProgram' };
-            if (method === 'createBuffer') return { __type__: 'WebGLBuffer' };
-            if (method === 'createTexture') return { __type__: 'WebGLTexture' };
-            if (method === 'createFramebuffer') return { __type__: 'WebGLFramebuffer' };
-            if (method === 'createRenderbuffer') return { __type__: 'WebGLRenderbuffer' };
-            if (method === 'getUniformLocation') return { __type__: 'WebGLUniformLocation' };
-            if (method === 'getAttribLocation') return 0;
-            if (method === 'getParameter') {
-                var glProfile = window.__profile__ && window.__profile__.webgl;
-                if (glProfile && glProfile.parameters) {
-                    var pname = args[0];
-                    var val = glProfile.parameters[String(pname)];
-                    if (val !== undefined) return val;
-                }
-                return null;
-            }
-            if (method === 'getError') return 0;
-            if (method === 'getSupportedExtensions') {
-                var glProfile2 = window.__profile__ && window.__profile__.webgl;
-                if (glProfile2 && glProfile2.extensions) return glProfile2.extensions;
-                return [];
-            }
-            if (method === 'getExtension') {
-                var extName = args[0];
-                var glProfile3 = window.__profile__ && window.__profile__.webgl;
-                if (glProfile3 && glProfile3.extensions) {
-                    if (!glProfile3.extensions.includes(extName)) return null;
-                    if (extName === 'WEBGL_debug_renderer_info') {
-                        return { UNMASKED_VENDOR_WEBGL: 37445, UNMASKED_RENDERER_WEBGL: 37446 };
-                    }
-                    if (extName === 'WEBGL_lose_context') {
-                        return { loseContext: function() {}, restoreContext: function() {} };
-                    }
-                    if (extName === 'OES_vertex_array_object') {
-                        return {
-                            VERTEX_ARRAY_BINDING_OES: 34229,
-                            createVertexArrayOES: function() { return { __type__: 'WebGLVertexArrayObject' }; },
-                            deleteVertexArrayOES: function() {},
-                            isVertexArrayOES: function() { return false; },
-                            bindVertexArrayOES: function() {}
-                        };
-                    }
-                    if (extName === 'ANGLE_instanced_arrays') {
-                        return {
-                            VERTEX_ATTRIB_ARRAY_DIVISOR_ANGLE: 35070,
-                            drawArraysInstancedANGLE: function() {},
-                            drawElementsInstancedANGLE: function() {},
-                            vertexAttribDivisorANGLE: function() {}
-                        };
-                    }
-                    return {};
-                }
-                return null;
-            }
-            if (method === 'getShaderParameter') return true;
-            if (method === 'getProgramParameter') return true;
-            if (method === 'getShaderInfoLog') return '';
-            if (method === 'getProgramInfoLog') return '';
-            if (method === 'isContextLost') return false;
-            if (method === 'getContextAttributes') {
-                return {
-                    alpha: true,
-                    antialias: true,
-                    depth: true,
-                    desynchronized: false,
-                    failIfMajorPerformanceCaveat: false,
-                    powerPreference: 'default',
-                    premultipliedAlpha: true,
-                    preserveDrawingBuffer: false,
-                    stencil: false,
-                    xrCompatible: false
-                };
-            }
-            if (method === 'getShaderPrecisionFormat') {
-                return { rangeMin: 127, rangeMax: 127, precision: 23 };
-            }
-            
-            return undefined;
-        };
-    });
-    
-    window.WebGLRenderingContext = WebGLRenderingContext;
-    
-    // ==================== WebGL2RenderingContext ====================
-    function WebGL2RenderingContext(canvas) {
-        WebGLRenderingContext.call(this, canvas);
-    }
-    WebGL2RenderingContext.prototype = Object.create(WebGLRenderingContext.prototype);
-    WebGL2RenderingContext.prototype.constructor = WebGL2RenderingContext;
-    window.WebGL2RenderingContext = WebGL2RenderingContext;
-    
     // ==================== HTMLVideoElement ====================
     function HTMLVideoElement() {
         HTMLElement.call(this, 'video');
-        // 媒体属性
-        this.autoplay = false;
         this.buffered = { length: 0, start: function() { return 0; }, end: function() { return 0; } };
-        this.controls = false;
-        this.crossOrigin = null;
         this.currentSrc = '';
         this.currentTime = 0;
         this.defaultMuted = false;
@@ -1182,14 +822,11 @@
         this.duration = NaN;
         this.ended = false;
         this.error = null;
-        this.loop = false;
         this.mediaKeys = null;
-        this.muted = false;
         this.networkState = 0;
         this.paused = true;
         this.playbackRate = 1;
         this.played = { length: 0, start: function() { return 0; }, end: function() { return 0; } };
-        this.preload = 'auto';
         this.preservesPitch = true;
         this.readyState = 0;
         this.remote = {};
@@ -1200,14 +837,11 @@
         this.srcObject = null;
         this.textTracks = [];
         this.volume = 1;
-        // 视频特有属性
-        this.height = 0;
-        this.poster = '';
         this.videoHeight = 0;
         this.videoWidth = 0;
-        this.width = 0;
-        this.playsInline = false;
         this.disablePictureInPicture = false;
+        // 媒体属性
+        // 视频特有属性
     }
     HTMLVideoElement.prototype = Object.create(HTMLElement.prototype);
     HTMLVideoElement.prototype.constructor = HTMLVideoElement;
@@ -1258,25 +892,20 @@
         Monitor.logCall('HTMLVideoElement.setMediaKeys', [mediaKeys], 'Promise');
         return Promise.resolve();
     };
-    window.HTMLVideoElement = HTMLVideoElement;
+    window.__elementInterfaces__.define(HTMLVideoElement, "HTMLVideoElement");
     
     // ==================== HTMLAudioElement ====================
     function HTMLAudioElement() {
         HTMLElement.call(this, 'audio');
-        // 继承媒体属性（简化版）
-        this.autoplay = false;
-        this.controls = false;
         this.currentSrc = '';
         this.currentTime = 0;
         this.duration = NaN;
         this.ended = false;
-        this.loop = false;
-        this.muted = false;
         this.paused = true;
         this.playbackRate = 1;
-        this.preload = 'auto';
         this.src = '';
         this.volume = 1;
+        // 继承媒体属性（简化版）
     }
     HTMLAudioElement.prototype = Object.create(HTMLElement.prototype);
     HTMLAudioElement.prototype.constructor = HTMLAudioElement;
@@ -1287,9 +916,10 @@
     HTMLAudioElement.prototype.pause = function() { this.paused = true; };
     HTMLAudioElement.prototype.load = function() {};
     HTMLAudioElement.prototype.canPlayType = function(type) { return 'maybe'; };
-    window.HTMLAudioElement = HTMLAudioElement;
+    window.__elementInterfaces__.define(HTMLAudioElement, "HTMLAudioElement");
     window.Audio = function(src) {
         const audio = new HTMLAudioElement();
+        liftOwnProperties(audio);
         if (src) audio.src = src;
         return audio;
     };
@@ -1297,25 +927,17 @@
     // ==================== HTMLIFrameElement ====================
     function HTMLIFrameElement() {
         HTMLElement.call(this, 'iframe');
-        this.allow = '';
         this.allowFullscreen = false;
         this.contentDocument = null;
         this.contentWindow = null;
         this.csp = '';
         this.featurePolicy = {};
-        this.height = '';
-        this.loading = 'eager';
-        this.name = '';
-        this.referrerPolicy = '';
         this.sandbox = new DOMTokenList(this, 'sandbox');
-        this.src = '';
-        this.srcdoc = '';
-        this.width = '';
     }
     HTMLIFrameElement.prototype = Object.create(HTMLElement.prototype);
     HTMLIFrameElement.prototype.constructor = HTMLIFrameElement;
     HTMLIFrameElement.prototype.getSVGDocument = function() { return null; };
-    window.HTMLIFrameElement = HTMLIFrameElement;
+    window.__elementInterfaces__.define(HTMLIFrameElement, "HTMLIFrameElement");
     
     // ==================== HTMLTableElement ====================
     function HTMLTableElement() {
@@ -1327,7 +949,6 @@
         this.rows = [];
         this.align = '';
         this.bgColor = '';
-        this.border = '';
         this.cellPadding = '';
         this.cellSpacing = '';
         this.frame = '';
@@ -1346,7 +967,7 @@
     HTMLTableElement.prototype.createTBody = function() { return new HTMLElement('tbody'); };
     HTMLTableElement.prototype.insertRow = function(index) { return new HTMLTableRowElement(); };
     HTMLTableElement.prototype.deleteRow = function(index) { };
-    window.HTMLTableElement = HTMLTableElement;
+    window.__elementInterfaces__.define(HTMLTableElement, "HTMLTableElement");
     
     // ==================== HTMLTableRowElement ====================
     function HTMLTableRowElement() {
@@ -1364,15 +985,13 @@
     HTMLTableRowElement.prototype.constructor = HTMLTableRowElement;
     HTMLTableRowElement.prototype.insertCell = function(index) { return new HTMLTableCellElement(); };
     HTMLTableRowElement.prototype.deleteCell = function(index) { };
-    window.HTMLTableRowElement = HTMLTableRowElement;
+    window.__elementInterfaces__.define(HTMLTableRowElement, "HTMLTableRowElement");
     
     // ==================== HTMLTableCellElement ====================
     function HTMLTableCellElement() {
         HTMLElement.call(this, 'td');
         this.cellIndex = -1;
-        this.colSpan = 1;
         this.headers = '';
-        this.rowSpan = 1;
         this.scope = '';
         this.abbr = '';
         this.align = '';
@@ -1387,46 +1006,41 @@
     }
     HTMLTableCellElement.prototype = Object.create(HTMLElement.prototype);
     HTMLTableCellElement.prototype.constructor = HTMLTableCellElement;
-    window.HTMLTableCellElement = HTMLTableCellElement;
+    window.__elementInterfaces__.define(HTMLTableCellElement, "HTMLTableCellElement");
     
     // ==================== HTMLUListElement / HTMLOListElement / HTMLLIElement ====================
     function HTMLUListElement() {
         HTMLElement.call(this, 'ul');
         this.compact = false;
-        this.type = '';
     }
     HTMLUListElement.prototype = Object.create(HTMLElement.prototype);
     HTMLUListElement.prototype.constructor = HTMLUListElement;
-    window.HTMLUListElement = HTMLUListElement;
+    window.__elementInterfaces__.define(HTMLUListElement, "HTMLUListElement");
     
     function HTMLOListElement() {
         HTMLElement.call(this, 'ol');
         this.compact = false;
         this.reversed = false;
         this.start = 1;
-        this.type = '';
     }
     HTMLOListElement.prototype = Object.create(HTMLElement.prototype);
     HTMLOListElement.prototype.constructor = HTMLOListElement;
-    window.HTMLOListElement = HTMLOListElement;
+    window.__elementInterfaces__.define(HTMLOListElement, "HTMLOListElement");
     
     function HTMLLIElement() {
         HTMLElement.call(this, 'li');
-        this.type = '';
-        this.value = 0;
     }
     HTMLLIElement.prototype = Object.create(HTMLElement.prototype);
     HTMLLIElement.prototype.constructor = HTMLLIElement;
-    window.HTMLLIElement = HTMLLIElement;
+    window.__elementInterfaces__.define(HTMLLIElement, "HTMLLIElement");
     
     // ==================== HTMLPreElement ====================
     function HTMLPreElement() {
         HTMLElement.call(this, 'pre');
-        this.width = 0;
     }
     HTMLPreElement.prototype = Object.create(HTMLElement.prototype);
     HTMLPreElement.prototype.constructor = HTMLPreElement;
-    window.HTMLPreElement = HTMLPreElement;
+    window.__elementInterfaces__.define(HTMLPreElement, "HTMLPreElement");
     
     // ==================== HTMLBRElement ====================
     function HTMLBRElement() {
@@ -1435,7 +1049,77 @@
     }
     HTMLBRElement.prototype = Object.create(HTMLElement.prototype);
     HTMLBRElement.prototype.constructor = HTMLBRElement;
-    window.HTMLBRElement = HTMLBRElement;
+    window.__elementInterfaces__.define(HTMLBRElement, "HTMLBRElement");
+
+    // ==================== HTMLUnknownElement ====================
+    // 未定义且不是合法自定义元素名的标签用 HTMLUnknownElement（合法自定义元素名仍是 HTMLElement）
+    function HTMLUnknownElement(tagName) {
+        HTMLElement.call(this, tagName || 'div');
+    }
+    HTMLUnknownElement.prototype = Object.create(HTMLElement.prototype);
+    HTMLUnknownElement.prototype.constructor = HTMLUnknownElement;
+    Object.defineProperty(HTMLUnknownElement.prototype, Symbol.toStringTag,
+        { value: 'HTMLUnknownElement', configurable: true });
+    window.__elementInterfaces__.define(HTMLUnknownElement, "HTMLUnknownElement");
+
+    const customElementName = /^[a-z][a-z0-9._]*-[a-z0-9._-]*$/;
+    window.__unknownElementFactory__ = function (tagName) {
+        return customElementName.test(String(tagName))
+            ? new HTMLElement(String(tagName)) : new HTMLUnknownElement(String(tagName));
+    };
+
+    // ==================== 其余元素接口 ====================
+    // 反射字符串属性（浏览器里这些属性同样在原型上，读写反射到 HTML 属性）
+    function reflectString(prototype, key, attribute) {
+        Object.defineProperty(prototype, key, {
+            get() { return this.getAttribute(attribute) ?? ''; },
+            set(value) { this.setAttribute(attribute, String(value)); },
+            enumerable: true, configurable: true
+        });
+    }
+
+    function HTMLQuoteElement(tagName) {
+        HTMLElement.call(this, tagName || 'q');
+    }
+    HTMLQuoteElement.prototype = Object.create(HTMLElement.prototype);
+    HTMLQuoteElement.prototype.constructor = HTMLQuoteElement;
+    reflectString(HTMLQuoteElement.prototype, 'cite', 'cite');
+    window.__elementInterfaces__.define(HTMLQuoteElement, 'HTMLQuoteElement');
+
+    function HTMLModElement(tagName) {
+        HTMLElement.call(this, tagName || 'ins');
+    }
+    HTMLModElement.prototype = Object.create(HTMLElement.prototype);
+    HTMLModElement.prototype.constructor = HTMLModElement;
+    reflectString(HTMLModElement.prototype, 'cite', 'cite');
+    reflectString(HTMLModElement.prototype, 'dateTime', 'datetime');
+    window.__elementInterfaces__.define(HTMLModElement, 'HTMLModElement');
+
+    function HTMLTableColElement(tagName) {
+        HTMLElement.call(this, tagName || 'col');
+    }
+    HTMLTableColElement.prototype = Object.create(HTMLElement.prototype);
+    HTMLTableColElement.prototype.constructor = HTMLTableColElement;
+    Object.defineProperty(HTMLTableColElement.prototype, 'span', {
+        get() {
+            const value = parseInt(this.getAttribute('span') ?? '', 10);
+            return Number.isNaN(value) || value < 1 ? 1 : Math.min(value, 1000);
+        },
+        set(value) {
+            const span = Math.trunc(Number(value));
+            this.setAttribute('span', String(Number.isFinite(span) && span >= 1 ? Math.min(span, 1000) : 1));
+        },
+        enumerable: true, configurable: true
+    });
+    window.__elementInterfaces__.define(HTMLTableColElement, 'HTMLTableColElement');
+
+    function HTMLParamElement() {
+        HTMLElement.call(this, 'param');
+    }
+    HTMLParamElement.prototype = Object.create(HTMLElement.prototype);
+    HTMLParamElement.prototype.constructor = HTMLParamElement;
+    for (const key of ['name', 'value', 'type', 'valueType']) reflectString(HTMLParamElement.prototype, key, key.toLowerCase());
+    window.__elementInterfaces__.define(HTMLParamElement, 'HTMLParamElement');
     
     // ==================== HTMLHRElement ====================
     function HTMLHRElement() {
@@ -1443,24 +1127,20 @@
         this.align = '';
         this.color = '';
         this.noShade = false;
-        this.size = '';
-        this.width = '';
     }
     HTMLHRElement.prototype = Object.create(HTMLElement.prototype);
     HTMLHRElement.prototype.constructor = HTMLHRElement;
-    window.HTMLHRElement = HTMLHRElement;
+    window.__elementInterfaces__.define(HTMLHRElement, "HTMLHRElement");
     
     // ==================== HTMLProgressElement ====================
     function HTMLProgressElement() {
         HTMLElement.call(this, 'progress');
         this.labels = [];
-        this.max = 1;
         this.position = -1;
-        this.value = 0;
     }
     HTMLProgressElement.prototype = Object.create(HTMLElement.prototype);
     HTMLProgressElement.prototype.constructor = HTMLProgressElement;
-    window.HTMLProgressElement = HTMLProgressElement;
+    window.__elementInterfaces__.define(HTMLProgressElement, "HTMLProgressElement");
     
     // ==================== HTMLMeterElement ====================
     function HTMLMeterElement() {
@@ -1468,28 +1148,23 @@
         this.high = 0;
         this.labels = [];
         this.low = 0;
-        this.max = 1;
-        this.min = 0;
         this.optimum = 0;
-        this.value = 0;
     }
     HTMLMeterElement.prototype = Object.create(HTMLElement.prototype);
     HTMLMeterElement.prototype.constructor = HTMLMeterElement;
-    window.HTMLMeterElement = HTMLMeterElement;
+    window.__elementInterfaces__.define(HTMLMeterElement, "HTMLMeterElement");
     
     // ==================== HTMLDetailsElement ====================
     function HTMLDetailsElement() {
         HTMLElement.call(this, 'details');
-        this.open = false;
     }
     HTMLDetailsElement.prototype = Object.create(HTMLElement.prototype);
     HTMLDetailsElement.prototype.constructor = HTMLDetailsElement;
-    window.HTMLDetailsElement = HTMLDetailsElement;
+    window.__elementInterfaces__.define(HTMLDetailsElement, "HTMLDetailsElement");
     
     // ==================== HTMLDialogElement ====================
     function HTMLDialogElement() {
         HTMLElement.call(this, 'dialog');
-        this.open = false;
         this.returnValue = '';
     }
     HTMLDialogElement.prototype = Object.create(HTMLElement.prototype);
@@ -1507,7 +1182,7 @@
         if (returnValue !== undefined) this.returnValue = returnValue;
         this.open = false; 
     };
-    window.HTMLDialogElement = HTMLDialogElement;
+    window.__elementInterfaces__.define(HTMLDialogElement, "HTMLDialogElement");
     
     // ==================== HTMLTemplateElement ====================
     function HTMLTemplateElement() {
@@ -1516,37 +1191,34 @@
     }
     HTMLTemplateElement.prototype = Object.create(HTMLElement.prototype);
     HTMLTemplateElement.prototype.constructor = HTMLTemplateElement;
-    window.HTMLTemplateElement = HTMLTemplateElement;
+    window.__elementInterfaces__.define(HTMLTemplateElement, "HTMLTemplateElement");
     
     // ==================== HTMLSlotElement ====================
     function HTMLSlotElement() {
         HTMLElement.call(this, 'slot');
-        this.name = '';
     }
     HTMLSlotElement.prototype = Object.create(HTMLElement.prototype);
     HTMLSlotElement.prototype.constructor = HTMLSlotElement;
     HTMLSlotElement.prototype.assignedNodes = function(options) { return []; };
     HTMLSlotElement.prototype.assignedElements = function(options) { return []; };
     HTMLSlotElement.prototype.assign = function(...nodes) { };
-    window.HTMLSlotElement = HTMLSlotElement;
+    window.__elementInterfaces__.define(HTMLSlotElement, "HTMLSlotElement");
     
     // ==================== HTMLDataElement ====================
     function HTMLDataElement() {
         HTMLElement.call(this, 'data');
-        this.value = '';
     }
     HTMLDataElement.prototype = Object.create(HTMLElement.prototype);
     HTMLDataElement.prototype.constructor = HTMLDataElement;
-    window.HTMLDataElement = HTMLDataElement;
+    window.__elementInterfaces__.define(HTMLDataElement, "HTMLDataElement");
     
     // ==================== HTMLTimeElement ====================
     function HTMLTimeElement() {
         HTMLElement.call(this, 'time');
-        this.dateTime = '';
     }
     HTMLTimeElement.prototype = Object.create(HTMLElement.prototype);
     HTMLTimeElement.prototype.constructor = HTMLTimeElement;
-    window.HTMLTimeElement = HTMLTimeElement;
+    window.__elementInterfaces__.define(HTMLTimeElement, "HTMLTimeElement");
     
     // ==================== HTMLOutputElement ====================
     function HTMLOutputElement() {
@@ -1555,7 +1227,6 @@
         this.form = null;
         this.htmlFor = new DOMTokenList(this, 'for');
         this.labels = [];
-        this.name = '';
         this.type = 'output';
         this.validationMessage = '';
         this.validity = { valid: true };
@@ -1567,7 +1238,7 @@
     HTMLOutputElement.prototype.checkValidity = function() { return true; };
     HTMLOutputElement.prototype.reportValidity = function() { return true; };
     HTMLOutputElement.prototype.setCustomValidity = function() { };
-    window.HTMLOutputElement = HTMLOutputElement;
+    window.__elementInterfaces__.define(HTMLOutputElement, "HTMLOutputElement");
     
     // ==================== HTMLFieldSetElement ====================
     function HTMLFieldSetElement() {
@@ -1575,7 +1246,6 @@
         this.disabled = false;
         this.elements = [];
         this.form = null;
-        this.name = '';
         this.type = 'fieldset';
         this.validationMessage = '';
         this.validity = { valid: true };
@@ -1586,7 +1256,7 @@
     HTMLFieldSetElement.prototype.checkValidity = function() { return true; };
     HTMLFieldSetElement.prototype.reportValidity = function() { return true; };
     HTMLFieldSetElement.prototype.setCustomValidity = function() { };
-    window.HTMLFieldSetElement = HTMLFieldSetElement;
+    window.__elementInterfaces__.define(HTMLFieldSetElement, "HTMLFieldSetElement");
     
     // ==================== HTMLLegendElement ====================
     function HTMLLegendElement() {
@@ -1596,7 +1266,7 @@
     }
     HTMLLegendElement.prototype = Object.create(HTMLElement.prototype);
     HTMLLegendElement.prototype.constructor = HTMLLegendElement;
-    window.HTMLLegendElement = HTMLLegendElement;
+    window.__elementInterfaces__.define(HTMLLegendElement, "HTMLLegendElement");
     
     // ==================== HTMLDataListElement ====================
     function HTMLDataListElement() {
@@ -1605,17 +1275,15 @@
     }
     HTMLDataListElement.prototype = Object.create(HTMLElement.prototype);
     HTMLDataListElement.prototype.constructor = HTMLDataListElement;
-    window.HTMLDataListElement = HTMLDataListElement;
+    window.__elementInterfaces__.define(HTMLDataListElement, "HTMLDataListElement");
     
     // ==================== HTMLOptGroupElement ====================
     function HTMLOptGroupElement() {
         HTMLElement.call(this, 'optgroup');
-        this.disabled = false;
-        this.label = '';
     }
     HTMLOptGroupElement.prototype = Object.create(HTMLElement.prototype);
     HTMLOptGroupElement.prototype.constructor = HTMLOptGroupElement;
-    window.HTMLOptGroupElement = HTMLOptGroupElement;
+    window.__elementInterfaces__.define(HTMLOptGroupElement, "HTMLOptGroupElement");
     
     // ==================== HTMLObjectElement ====================
     function HTMLObjectElement() {
@@ -1628,15 +1296,11 @@
         this.codeType = '';
         this.contentDocument = null;
         this.contentWindow = null;
-        this.data = '';
         this.declare = false;
         this.form = null;
         this.height = '';
         this.hspace = 0;
-        this.name = '';
         this.standby = '';
-        this.type = '';
-        this.useMap = '';
         this.validationMessage = '';
         this.validity = { valid: true };
         this.vspace = 0;
@@ -1649,7 +1313,7 @@
     HTMLObjectElement.prototype.reportValidity = function() { return true; };
     HTMLObjectElement.prototype.setCustomValidity = function() { };
     HTMLObjectElement.prototype.getSVGDocument = function() { return null; };
-    window.HTMLObjectElement = HTMLObjectElement;
+    window.__elementInterfaces__.define(HTMLObjectElement, "HTMLObjectElement");
     
     // ==================== HTMLEmbedElement ====================
     function HTMLEmbedElement() {
@@ -1657,46 +1321,32 @@
         this.align = '';
         this.height = '';
         this.name = '';
-        this.src = '';
-        this.type = '';
         this.width = '';
     }
     HTMLEmbedElement.prototype = Object.create(HTMLElement.prototype);
     HTMLEmbedElement.prototype.constructor = HTMLEmbedElement;
     HTMLEmbedElement.prototype.getSVGDocument = function() { return null; };
-    window.HTMLEmbedElement = HTMLEmbedElement;
+    window.__elementInterfaces__.define(HTMLEmbedElement, "HTMLEmbedElement");
     
     // ==================== HTMLSourceElement ====================
     function HTMLSourceElement() {
         HTMLElement.call(this, 'source');
-        this.height = 0;
-        this.media = '';
-        this.sizes = '';
-        this.src = '';
-        this.srcset = '';
-        this.type = '';
-        this.width = 0;
     }
     HTMLSourceElement.prototype = Object.create(HTMLElement.prototype);
     HTMLSourceElement.prototype.constructor = HTMLSourceElement;
-    window.HTMLSourceElement = HTMLSourceElement;
+    window.__elementInterfaces__.define(HTMLSourceElement, "HTMLSourceElement");
     
     // ==================== HTMLTrackElement ====================
     function HTMLTrackElement() {
         HTMLElement.call(this, 'track');
-        this.default = false;
-        this.kind = 'subtitles';
-        this.label = '';
         this.readyState = 0;
-        this.src = '';
-        this.srclang = '';
         this.track = null;
-        
-        // 常量
         this.NONE = 0;
         this.LOADING = 1;
         this.LOADED = 2;
         this.ERROR = 3;
+        
+        // 常量
     }
     HTMLTrackElement.prototype = Object.create(HTMLElement.prototype);
     HTMLTrackElement.prototype.constructor = HTMLTrackElement;
@@ -1704,7 +1354,7 @@
     HTMLTrackElement.LOADING = 1;
     HTMLTrackElement.LOADED = 2;
     HTMLTrackElement.ERROR = 3;
-    window.HTMLTrackElement = HTMLTrackElement;
+    window.__elementInterfaces__.define(HTMLTrackElement, "HTMLTrackElement");
     
     // ==================== HTMLPictureElement ====================
     function HTMLPictureElement() {
@@ -1712,24 +1362,21 @@
     }
     HTMLPictureElement.prototype = Object.create(HTMLElement.prototype);
     HTMLPictureElement.prototype.constructor = HTMLPictureElement;
-    window.HTMLPictureElement = HTMLPictureElement;
+    window.__elementInterfaces__.define(HTMLPictureElement, "HTMLPictureElement");
     
     // ==================== HTMLMapElement ====================
     function HTMLMapElement() {
         HTMLElement.call(this, 'map');
         this.areas = [];
-        this.name = '';
     }
     HTMLMapElement.prototype = Object.create(HTMLElement.prototype);
     HTMLMapElement.prototype.constructor = HTMLMapElement;
-    window.HTMLMapElement = HTMLMapElement;
+    window.__elementInterfaces__.define(HTMLMapElement, "HTMLMapElement");
     
     // ==================== HTMLAreaElement ====================
     function HTMLAreaElement() {
         HTMLElement.call(this, 'area');
-        this.alt = '';
         this.coords = '';
-        this.download = '';
         this.hash = '';
         this.host = '';
         this.hostname = '';
@@ -1738,21 +1385,17 @@
         this.origin = '';
         this.password = '';
         this.pathname = '';
-        this.ping = '';
         this.port = '';
         this.protocol = '';
-        this.referrerPolicy = '';
-        this.rel = '';
         this.relList = new DOMTokenList(this, 'rel');
         this.search = '';
         this.shape = '';
-        this.target = '';
         this.username = '';
     }
     HTMLAreaElement.prototype = Object.create(HTMLElement.prototype);
     HTMLAreaElement.prototype.constructor = HTMLAreaElement;
     HTMLAreaElement.prototype.toString = function() { return this.href; };
-    window.HTMLAreaElement = HTMLAreaElement;
+    window.__elementInterfaces__.define(HTMLAreaElement, "HTMLAreaElement");
     
     // ==================== SVGElement ====================
     function SVGElement(tagName) {
@@ -1760,7 +1403,8 @@
     }
     SVGElement.prototype = Object.create(Element.prototype);
     SVGElement.prototype.constructor = SVGElement;
-    window.SVGElement = SVGElement;
+    copyAccessors(SVGElement.prototype, ['style', 'dataset']);
+    window.__elementInterfaces__.define(SVGElement, "SVGElement");
     
     // ==================== SVGSVGElement ====================
     function SVGSVGElement() {
@@ -1797,8 +1441,422 @@
     SVGSVGElement.prototype.animationsPaused = function() { return false; };
     SVGSVGElement.prototype.getCurrentTime = function() { return 0; };
     SVGSVGElement.prototype.setCurrentTime = function() { };
-    window.SVGSVGElement = SVGSVGElement;
+    window.__elementInterfaces__.define(SVGSVGElement, "SVGSVGElement");
     
+
+    // ==================== 反射属性表 ====================
+    // 浏览器里这些属性读写的是对应的 HTML 属性（此前是实例状态，与属性脱节）
+    function reflectBoolean(prototype, key, attribute) {
+        Object.defineProperty(prototype, key, {
+            get() { return this.hasAttribute(attribute); },
+            set(value) {
+                if (value) this.setAttribute(attribute, '');
+                else this.removeAttribute(attribute);
+            },
+            enumerable: true, configurable: true
+        });
+    }
+
+    function reflectNumber(prototype, key, attribute, fallback) {
+        Object.defineProperty(prototype, key, {
+            get() {
+                const value = parseInt(this.getAttribute(attribute) ?? '', 10);
+                return Number.isNaN(value) ? fallback : value;
+            },
+            set(value) {
+                const number = Math.trunc(Number(value));
+                this.setAttribute(attribute, String(Number.isFinite(number) ? number : fallback));
+            },
+            enumerable: true, configurable: true
+        });
+    }
+
+    const reflectedAttributes = {
+        "HTMLAnchorElement": {
+            "strings": {
+                "target": "target",
+                "download": "download",
+                "hreflang": "hreflang",
+                "type": "type",
+                "rel": "rel",
+                "ping": "ping",
+                "referrerPolicy": "referrerpolicy"
+            }
+        },
+        "HTMLImageElement": {
+            "strings": {
+                "alt": "alt",
+                "srcset": "srcset",
+                "sizes": "sizes",
+                "crossOrigin": "crossorigin",
+                "useMap": "usemap",
+                "decoding": "decoding",
+                "loading": "loading",
+                "referrerPolicy": "referrerpolicy",
+                "fetchPriority": "fetchpriority"
+            },
+            "booleans": {
+                "isMap": "ismap"
+            }
+        },
+        "HTMLLinkElement": {
+            "strings": {
+                "rel": "rel",
+                "type": "type",
+                "hreflang": "hreflang",
+                "media": "media",
+                "sizes": "sizes",
+                "integrity": "integrity",
+                "crossOrigin": "crossorigin",
+                "referrerPolicy": "referrerpolicy",
+                "as": "as",
+                "fetchPriority": "fetchpriority",
+                "imageSrcset": "imagesrcset",
+                "imageSizes": "imagesizes",
+                "blocking": "blocking"
+            },
+            "booleans": {
+                "disabled": "disabled"
+            }
+        },
+        "HTMLScriptElement": {
+            "strings": {
+                "src": "src",
+                "type": "type",
+                "crossOrigin": "crossorigin",
+                "integrity": "integrity",
+                "referrerPolicy": "referrerpolicy",
+                "nonce": "nonce",
+                "fetchPriority": "fetchpriority",
+                "blocking": "blocking"
+            },
+            "booleans": {
+                "async": "async",
+                "defer": "defer",
+                "noModule": "nomodule"
+            }
+        },
+        "HTMLMetaElement": {
+            "strings": {
+                "name": "name",
+                "content": "content",
+                "httpEquiv": "http-equiv",
+                "charset": "charset",
+                "media": "media"
+            }
+        },
+        "HTMLIFrameElement": {
+            "strings": {
+                "src": "src",
+                "name": "name",
+                "srcdoc": "srcdoc",
+                "width": "width",
+                "height": "height",
+                "allow": "allow",
+                "referrerPolicy": "referrerpolicy",
+                "loading": "loading",
+                "fetchPriority": "fetchpriority"
+            }
+        },
+        "HTMLFormElement": {
+            "strings": {
+                "action": "action",
+                "method": "method",
+                "enctype": "enctype",
+                "target": "target",
+                "name": "name"
+            },
+            "booleans": {
+                "noValidate": "novalidate"
+            }
+        },
+        "HTMLInputElement": {
+            "strings": {
+                "type": "type",
+                "name": "name",
+                "placeholder": "placeholder",
+                "accept": "accept",
+                "autocomplete": "autocomplete",
+                "alt": "alt",
+                "pattern": "pattern",
+                "step": "step",
+                "min": "min",
+                "max": "max"
+            },
+            "booleans": {
+                "required": "required",
+                "readOnly": "readonly",
+                "disabled": "disabled",
+                "multiple": "multiple",
+                "autofocus": "autofocus"
+            },
+            "numbers": {
+                "maxLength": "maxlength",
+                "minLength": "minlength",
+                "size": "size"
+            }
+        },
+        "HTMLButtonElement": {
+            "strings": {
+                "type": "type",
+                "name": "name",
+                "value": "value",
+                "formAction": "formaction",
+                "formMethod": "formmethod",
+                "formEnctype": "formenctype",
+                "formTarget": "formtarget"
+            },
+            "booleans": {
+                "disabled": "disabled",
+                "autofocus": "autofocus",
+                "formNoValidate": "formnovalidate"
+            }
+        },
+        "HTMLSelectElement": {
+            "strings": {
+                "name": "name",
+                "autocomplete": "autocomplete"
+            },
+            "booleans": {
+                "multiple": "multiple",
+                "required": "required",
+                "disabled": "disabled",
+                "autofocus": "autofocus"
+            },
+            "numbers": {
+                "size": "size"
+            }
+        },
+        "HTMLTextAreaElement": {
+            "strings": {
+                "name": "name",
+                "placeholder": "placeholder",
+                "wrap": "wrap",
+                "autocomplete": "autocomplete"
+            },
+            "booleans": {
+                "required": "required",
+                "readOnly": "readonly",
+                "disabled": "disabled",
+                "autofocus": "autofocus"
+            },
+            "numbers": {
+                "rows": "rows",
+                "cols": "cols",
+                "maxLength": "maxlength",
+                "minLength": "minlength"
+            }
+        },
+        "HTMLOptionElement": {
+            "strings": {
+                "value": "value",
+                "label": "label"
+            },
+            "booleans": {
+                "defaultSelected": "selected"
+            }
+        },
+        "HTMLSourceElement": {
+            "strings": {
+                "src": "src",
+                "srcset": "srcset",
+                "sizes": "sizes",
+                "type": "type",
+                "media": "media",
+                "width": "width",
+                "height": "height"
+            }
+        },
+        "HTMLTrackElement": {
+            "strings": {
+                "src": "src",
+                "srclang": "srclang",
+                "label": "label",
+                "kind": "kind"
+            },
+            "booleans": {
+                "default": "default"
+            }
+        },
+        "HTMLVideoElement": {
+            "strings": {
+                "poster": "poster",
+                "preload": "preload",
+                "crossOrigin": "crossorigin"
+            },
+            "booleans": {
+                "autoplay": "autoplay",
+                "loop": "loop",
+                "muted": "muted",
+                "controls": "controls",
+                "playsInline": "playsinline"
+            },
+            "numbers": {
+                "width": "width",
+                "height": "height"
+            }
+        },
+        "HTMLAudioElement": {
+            "strings": {
+                "preload": "preload",
+                "crossOrigin": "crossorigin"
+            },
+            "booleans": {
+                "autoplay": "autoplay",
+                "loop": "loop",
+                "muted": "muted",
+                "controls": "controls"
+            }
+        },
+        "HTMLObjectElement": {
+            "strings": {
+                "data": "data",
+                "type": "type",
+                "name": "name",
+                "useMap": "usemap"
+            }
+        },
+        "HTMLEmbedElement": {
+            "strings": {
+                "src": "src",
+                "type": "type"
+            }
+        },
+        "HTMLDataElement": {
+            "strings": {
+                "value": "value"
+            }
+        },
+        "HTMLTimeElement": {
+            "strings": {
+                "dateTime": "datetime"
+            }
+        },
+        "HTMLOutputElement": {
+            "strings": {
+                "name": "name"
+            }
+        },
+        "HTMLFieldSetElement": {
+            "strings": {
+                "name": "name"
+            }
+        },
+        "HTMLDetailsElement": {
+            "booleans": {
+                "open": "open"
+            }
+        },
+        "HTMLDialogElement": {
+            "booleans": {
+                "open": "open"
+            }
+        },
+        "HTMLSlotElement": {
+            "strings": {
+                "name": "name"
+            }
+        },
+        "HTMLMediaElement": {
+            "strings": {
+                "src": "src"
+            }
+        },
+        "HTMLTableCellElement": {
+            "numbers": {
+                "colSpan": "colspan",
+                "rowSpan": "rowspan"
+            }
+        },
+        "HTMLTableElement": {
+            "strings": {
+                "border": "border"
+            }
+        },
+        "HTMLBaseElement": {
+            "strings": {
+                "target": "target"
+            }
+        }
+    };
+    const reflectedProperties = new Set();
+    for (const [interfaceName, spec] of Object.entries(reflectedAttributes)) {
+        const Constructor = window[interfaceName];
+        if (typeof Constructor !== 'function' || !Constructor.prototype) continue;
+        for (const [key, attribute] of Object.entries(spec.strings || {})) {
+            reflectString(Constructor.prototype, key, attribute);
+            reflectedProperties.add(key);
+        }
+        for (const [key, attribute] of Object.entries(spec.booleans || {})) {
+            reflectBoolean(Constructor.prototype, key, attribute);
+            reflectedProperties.add(key);
+        }
+        for (const [key, attribute] of Object.entries(spec.numbers || {})) {
+            reflectNumber(Constructor.prototype, key, attribute, 0);
+            reflectedProperties.add(key);
+        }
+    }
+
+    // ==================== 自有属性提升 ====================
+    // 浏览器里元素实例没有自有属性：构造函数写入的数据属性在创建后搬到原型上（访问器 + 每实例状态）
+    const elementPropertyState = new WeakMap();
+    function propertyStateOf(element) {
+        let state = elementPropertyState.get(element);
+        if (!state) {
+            state = new Map();
+            elementPropertyState.set(element, state);
+        }
+        return state;
+    }
+
+    function defineLiftedAccessor(prototype, key) {
+        const holder = {
+            get [key]() { return propertyStateOf(this).get(key); },
+            set [key](value) { propertyStateOf(this).set(key, value); }
+        };
+        const descriptor = Object.getOwnPropertyDescriptor(holder, key);
+        Object.defineProperty(prototype, key, {
+            get: window.safefunction(descriptor.get, 'get ' + key),
+            set: window.safefunction(descriptor.set, 'set ' + key),
+            enumerable: true, configurable: true
+        });
+    }
+
+    function liftOwnProperties(element) {
+        const prototype = Object.getPrototypeOf(element);
+        const state = propertyStateOf(element);
+        for (const key of Object.getOwnPropertyNames(element)) {
+            if (key.startsWith('__')) continue;
+            const descriptor = Object.getOwnPropertyDescriptor(element, key);
+            // 只提升可写可配置的数据属性；只读/不可配置的属于内部状态
+            if (!descriptor || !('value' in descriptor) || !descriptor.writable || !descriptor.configurable) continue;
+            if (!Object.prototype.hasOwnProperty.call(prototype, key)) defineLiftedAccessor(prototype, key);
+            state.set(key, descriptor.value);
+            delete element[key];
+        }
+    }
+
+    function copyElementState(source, target) {
+        const state = elementPropertyState.get(source);
+        if (!state) return;
+        const targetState = propertyStateOf(target);
+        for (const [key, value] of state) targetState.set(key, value);
+    }
+
+    Object.defineProperty(window, '__elementProps__', {
+        value: Object.freeze({ lift: liftOwnProperties, copy: copyElementState }),
+        configurable: true
+    });
+    // 通用版：任何「实例不留自有属性」的对象（元素、事件、Blob 等）都可以用
+    Object.defineProperty(window, '__liftOwnProperties__', {
+        value: liftOwnProperties, configurable: true
+    });
+
+    // document.js 在加载时已创建 html / head / body，补做一次提升
+    for (const node of [document.documentElement, document.head, document.body]) {
+        if (node) liftOwnProperties(node);
+    }
+
     // ==================== 元素构造函数映射表 ====================
     const elementConstructors = {
         // 基础元素
@@ -1872,6 +1930,14 @@
         'dialog': HTMLDialogElement,
         
         // 其他
+        'blockquote': function() { return new HTMLQuoteElement('blockquote'); },
+        'q': function() { return new HTMLQuoteElement('q'); },
+        'ins': function() { return new HTMLModElement('ins'); },
+        'del': function() { return new HTMLModElement('del'); },
+        'col': function() { return new HTMLTableColElement('col'); },
+        'colgroup': function() { return new HTMLTableColElement('colgroup'); },
+        'param': HTMLParamElement,
+        'summary': function() { return new HTMLElement('summary'); },
         'template': HTMLTemplateElement,
         'slot': HTMLSlotElement,
         'data': HTMLDataElement,
@@ -1884,40 +1950,21 @@
     };
     
     // 暴露构造函数映射表
+    // 经 createElement 创建的元素同样没有自有属性
+    for (const tag of Object.keys(elementConstructors)) {
+        const Constructor = elementConstructors[tag];
+        elementConstructors[tag] = function () {
+            const element = new Constructor();
+            liftOwnProperties(element);
+            return element;
+        };
+    }
+
     window.__elementConstructors__ = elementConstructors;
     
-    // ==================== DOMTokenList (如果不存在) ====================
-    if (!window.DOMTokenList) {
-        function DOMTokenList(element, attrName) {
-            this._element = element;
-            this._attrName = attrName;
-            this._tokens = [];
-        }
-        DOMTokenList.prototype = {
-            add: function(...tokens) { tokens.forEach(t => { if (!this._tokens.includes(t)) this._tokens.push(t); }); },
-            remove: function(...tokens) { tokens.forEach(t => { const i = this._tokens.indexOf(t); if (i > -1) this._tokens.splice(i, 1); }); },
-            contains: function(token) { return this._tokens.includes(token); },
-            toggle: function(token, force) {
-                if (force !== undefined) {
-                    if (force) this.add(token); else this.remove(token);
-                    return force;
-                }
-                if (this.contains(token)) { this.remove(token); return false; }
-                this.add(token); return true;
-            },
-            replace: function(oldToken, newToken) {
-                const i = this._tokens.indexOf(oldToken);
-                if (i > -1) { this._tokens[i] = newToken; return true; }
-                return false;
-            },
-            item: function(index) { return this._tokens[index] || null; },
-            get length() { return this._tokens.length; },
-            get value() { return this._tokens.join(' '); },
-            toString: function() { return this._tokens.join(' '); }
-        };
-        window.DOMTokenList = DOMTokenList;
-    }
-    
+    // DOMTokenList 由 document.js 提供：classList / relList / htmlFor 共用同一个类
+    const DOMTokenList = window.__domTokenListClass__;
+
     // ==================== DOMMatrix (如果不存在) ====================
     if (!window.DOMMatrix) {
         function DOMMatrix(init) {
@@ -1942,6 +1989,17 @@
         window.DOMMatrixReadOnly = DOMMatrix;
     }
     
+    // 继承 Node 的接口原型没有自己的 Symbol.toStringTag 时会继承到 EventTarget 的；按接口名补上
+    for (const name of Object.getOwnPropertyNames(window)) {
+        const descriptor = Object.getOwnPropertyDescriptor(window, name);
+        const ctor = descriptor && descriptor.value;
+        if (typeof ctor !== 'function' || !ctor.prototype || ctor.name !== name) continue;
+        const proto = ctor.prototype;
+        if (proto !== Node.prototype && !Node.prototype.isPrototypeOf(proto)) continue;
+        if (Object.prototype.hasOwnProperty.call(proto, Symbol.toStringTag)) continue;
+        Object.defineProperty(proto, Symbol.toStringTag, { value: name, configurable: true });
+    }
+
     console.log('[elements.js] HTML元素类型库加载完成，共注册', Object.keys(elementConstructors).length, '种元素类型');
     
 })();

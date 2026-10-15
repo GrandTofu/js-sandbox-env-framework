@@ -19,15 +19,20 @@
     });
     safefunction(toString, 'toString');
 
+    // 已登记的函数保持原名：别名（如 webkitURL === URL）不能覆盖真实名称
+    function markIfNew(fn, name) {
+        if (typeof fn === 'function' && !nativeSources.has(fn)) safefunction(fn, name);
+    }
+
     function markOwnMethods(object) {
         if (!object || (typeof object !== 'object' && typeof object !== 'function')) return;
         for (const key of Object.getOwnPropertyNames(object)) {
             if (key === 'constructor' || key === 'caller' || key === 'arguments') continue;
             const descriptor = Object.getOwnPropertyDescriptor(object, key);
             if (!descriptor) continue;
-            if (typeof descriptor.value === 'function') safefunction(descriptor.value, key);
-            if (descriptor.get) safefunction(descriptor.get, `get ${key}`);
-            if (descriptor.set) safefunction(descriptor.set, `set ${key}`);
+            markIfNew(descriptor.value, key);
+            markIfNew(descriptor.get, `get ${key}`);
+            markIfNew(descriptor.set, `set ${key}`);
         }
     }
 
