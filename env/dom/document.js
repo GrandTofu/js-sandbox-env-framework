@@ -36,6 +36,7 @@
         this._element = element;
         this._styles = {};
         this._importantStyles = {};
+        this._parentRule = null;
         window.__elementProps__?.lift(this);
 
         return new Proxy(this, {
@@ -43,7 +44,7 @@
                 if (typeof prop === 'symbol') return target[prop];
                 if (prop in target) return target[prop];
                 // 数值索引：style[0] 返回第 n 个属性名（与 Chrome 一致）
-                if (/^\d+$/.test(prop)) return target.item(Number(prop));
+                if (/^(0|[1-9]\d*)$/.test(prop)) return target.item(Number(prop)) || undefined;
                 const cssProp = prop.replace(/([A-Z])/g, '-$1').toLowerCase();
                 return target._styles[cssProp] || '';
             },
@@ -73,6 +74,7 @@
     }
     
     CSSStyleDeclaration.prototype = {
+        get parentRule() { return this._parentRule; },
         _syncAttribute: function() {
             if (!this._element?.attributes) return;
             const value = this.cssText;
@@ -131,15 +133,8 @@
         },
         item: function(index) {
             return Object.keys(this._styles).filter(k => !k.startsWith('_'))[index] || '';
-        },
-        _names: function() {
-            return Object.keys(this._styles).filter(k => !k.startsWith('_'));
         }
     };
-    // 索引访问器：style[0] 返回第 0 个属性名（与 Chrome 的 CSSStyleDeclaration 索引行为一致）
-    Object.defineProperty(CSSStyleDeclaration.prototype, '0', {
-        get() { return this.item(0); }, configurable: true
-    });
     
     // ==================== DOMTokenList (classList) ====================
     function DOMTokenList(element, attrName) {

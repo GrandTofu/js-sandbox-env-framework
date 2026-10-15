@@ -39,9 +39,9 @@
     }
 
     // ==================== Crypto ====================
-    // WebIDL 的 Crypto.getRandomValues 只接受 8 种整数 TypedArray；BigInt64Array / BigUint64Array 不在列表
+    // Web Crypto 接受整数 TypedArray，包括 BigInt64Array / BigUint64Array。
     const integerArrays = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array,
-        Int32Array, Uint32Array];
+        Int32Array, Uint32Array, BigInt64Array, BigUint64Array];
 
     function getRandomValues(array) {
         if (!integerArrays.some(Type => array instanceof Type)) {

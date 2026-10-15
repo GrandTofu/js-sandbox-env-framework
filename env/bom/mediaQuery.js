@@ -235,19 +235,6 @@
         return splitList(text).some(evaluateQuery);
     }
 
-    // 括号是否平衡（畸形查询如 '(min-width:' 缺少闭合括号）
-    function balanced(text) {
-        let depth = 0;
-        for (let i = 0; i < text.length; i++) {
-            if (text[i] === '(') depth++;
-            else if (text[i] === ')') {
-                depth--;
-                if (depth < 0) return false;
-            }
-        }
-        return depth === 0;
-    }
-
     // Chrome 序列化：去掉多余空白，冒号后一个空格
     function serialize(text) {
         return splitList(text).map(part => part.trim().replace(/\s+/g, ' ')
@@ -290,10 +277,7 @@
                 throw new TypeError("Failed to execute 'matchMedia' on 'Window': 1 argument required, but only 0 present.");
             }
             const text = String(query);
-            // 畸形媒体查询（括号不匹配）在 Chrome 中抛 SyntaxError
-            if (!balanced(text)) {
-                throw new SyntaxError(`Failed to parse '${text}' as a media query.`);
-            }
+            // 解析失败的查询按不匹配处理；matchMedia 不因 CSS 语法错误抛异常。
             return idl.create('MediaQueryList', { query: text, media: serialize(text), onchange: null });
         }
     };
