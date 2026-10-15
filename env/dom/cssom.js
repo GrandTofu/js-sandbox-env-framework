@@ -83,6 +83,7 @@
         parent: 'CSSRule',
         attributes: {
             media() { return internal(this).media; },
+            conditionText() { return internal(this).conditionText; },
             cssRules() { return internal(this).ruleList; }
         },
         methods: {
@@ -97,6 +98,32 @@
             }
         }
     });
+
+    // 其余 CSS 规则接口：常量与 CSSRule 一致，属性按需提供，序列化返回空（无采集需求）
+    function atRuleInterface(name, extraAttributes = {}) {
+        idl.defineInterface(name, {
+            parent: 'CSSRule',
+            attributes: Object.assign({
+                cssText() { return ''; },
+                cssRules() { return internal(this).ruleList || ruleList([]); },
+                conditionText() { return internal(this).conditionText || ''; }
+            }, extraAttributes)
+        });
+    }
+    atRuleInterface('CSSKeyframesRule', {
+        name() { return internal(this).name || ''; },
+        cssRules() { return internal(this).ruleList || ruleList([]); }
+    });
+    atRuleInterface('CSSKeyframeRule', {
+        keyText() { return internal(this).keyText || ''; }
+    });
+    atRuleInterface('CSSFontFaceRule');
+    atRuleInterface('CSSSupportsRule');
+    atRuleInterface('CSSNamespaceRule', {
+        namespaceURI() { return internal(this).namespaceURI || ''; },
+        prefix() { return internal(this).prefix || ''; }
+    });
+    atRuleInterface('CSSPageRule');
 
     // ==================== 列表 ====================
     idl.defineInterface('CSSRuleList', {
@@ -147,8 +174,9 @@
         const close = source.lastIndexOf('}');
         const body = source.slice(open + 1, close < 0 ? source.length : close);
         if (prelude.startsWith('@media')) {
+            const condition = prelude.slice(6).trim();
             const rules = parseRuleList(body, null);
-            return { type: 4, media: mediaList(prelude.slice(6).trim()), rules, ruleList: ruleList(rules) };
+            return { type: 4, media: mediaList(condition), conditionText: condition, rules, ruleList: ruleList(rules) };
         }
         if (prelude.startsWith('@')) return null;
         return { type: 1, selectorText: prelude, declaration: declarationsOf(body) };
@@ -173,6 +201,8 @@
             style: parsed.declaration,
             cssText() { return `${this.selectorText} { ${this.style.cssText} }`; }
         });
+        // 规则样式表的 parentRule 指向所属规则（经内部字段，避免污染 cssText 序列化）
+        parsed.declaration._parentRule = rule;
         return rule;
     }
 

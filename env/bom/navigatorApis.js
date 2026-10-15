@@ -222,6 +222,90 @@
     });
 
     /** 按 profile 创建 navigator 的子对象；battery 是 getBattery() 每次返回的同一个 Promise。 */
+    // ==================== GPU / WebGPU ====================
+    idl.defineInterface('GPU', {
+        methods: {
+            requestAdapter() { return Promise.resolve(null); }
+        }
+    });
+
+    // ==================== UserActivation ====================
+    idl.defineInterface('UserActivation', {
+        attributes: {
+            isActive() { return idl.internal(this).isActive; },
+            hasBeenActive() { return idl.internal(this).hasBeenActive; }
+        }
+    });
+
+    // ==================== MediaCapabilities ====================
+    idl.defineInterface('MediaCapabilities', {
+        methods: {
+            decodingInfo() { return Promise.resolve({ supported: false, smooth: false, powerEfficient: false }); },
+            encodingInfo() { return Promise.resolve({ supported: false, smooth: false, powerEfficient: false }); }
+        }
+    });
+
+    // ==================== Keyboard / Mouse / Pointer ====================
+    defineEventTargetInterface('Keyboard', {
+        methods: { lock() {}, unlock() {}, getLayoutMap() { return Promise.resolve(new Map()); } }
+    });
+    defineEventTargetInterface('Mouse', {
+        methods: { getMovementDelta() { return [0, 0]; } }
+    });
+    defineEventTargetInterface('PointerLock', {});
+
+    // ==================== 设备能力接口 ====================
+    idl.defineInterface('Bluetooth', {
+        methods: { requestDevice() { return notAllowed(); }, requestLEScan() { return notAllowed(); } }
+    });
+    idl.defineInterface('USB', {
+        methods: {
+            getDevices() { return Promise.resolve([]); },
+            requestDevice() { return Promise.reject(new DOMException('No device selected', 'NotFoundError')); }
+        }
+    });
+    idl.defineInterface('Serial', {
+        methods: {
+            getPorts() { return Promise.resolve([]); },
+            requestPort() { return Promise.reject(new DOMException('No port selected', 'NotFoundError')); }
+        }
+    });
+    idl.defineInterface('HID', {
+        methods: {
+            getDevices() { return Promise.resolve([]); },
+            requestDevice() { return Promise.reject(new DOMException('No device selected', 'NotFoundError')); }
+        }
+    });
+    idl.defineInterface('XRSystem', {
+        methods: {
+            isSessionSupported() { return Promise.resolve(false); },
+            requestSession() { return Promise.reject(new DOMException('XR not supported', 'NotSupportedError')); }
+        }
+    });
+    defineEventTargetInterface('Presentation', {
+        attributes: { receiver: { get() { return null; } } },
+        methods: { requestSession() { return Promise.resolve(null); } }
+    });
+
+    // ==================== gamepad / midi / media key system ====================
+    idl.defineInterface('Gamepad', {
+        attributes: {
+            id() { return idl.internal(this).id; },
+            index() { return idl.internal(this).index; },
+            connected() { return idl.internal(this).connected; },
+            buttons() { return idl.internal(this).buttons; },
+            axes() { return idl.internal(this).axes; }
+        }
+    });
+    idl.defineInterface('MIDIAccess', {
+        parent: 'EventTarget',
+        attributes: { inputs() { return new Map(); }, outputs() { return new Map(); }, sysexEnabled() { return false; } }
+    });
+    idl.defineInterface('MediaKeySystemAccess', {
+        attributes: { keySystem() { return idl.internal(this).keySystem; } },
+        methods: { getConfiguration() { return { videoCapabilities: [], audioCapabilities: [], persistentState: 'optional', distinctiveIdentifier: 'optional' }; } }
+    });
+
     // ==================== LockManager (navigator.locks) ====================
     idl.defineInterface('Lock', {
         attributes: {
@@ -344,6 +428,19 @@
             locks: idl.create('LockManager'),
             wakeLock: idl.create('WakeLock'),
             mediaSession: idl.create('MediaSession', { metadata: null, playbackState: 'none' }),
+            gpu: idl.create('GPU'),
+            userActivation: idl.create('UserActivation', { isActive: false, hasBeenActive: false }),
+            mediaCapabilities: idl.create('MediaCapabilities'),
+            keyboard: idl.create('Keyboard'),
+            mouse: idl.create('Mouse'),
+            bluetooth: idl.create('Bluetooth'),
+            usb: idl.create('USB'),
+            serial: idl.create('Serial'),
+            hid: idl.create('HID'),
+            xr: idl.create('XRSystem'),
+            presentation: idl.create('Presentation'),
+            gamepad: idl.create('Gamepad', { id: '', index: 0, connected: false, buttons: [], axes: [] }),
+            midi: idl.create('MIDIAccess'),
             battery: Promise.resolve(battery)
         };
     }

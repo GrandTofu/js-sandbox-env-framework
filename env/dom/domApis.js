@@ -184,6 +184,11 @@
         return false;
     }
 
+    // 文本节点的边界长度是 data.length；其他节点是子节点数量
+    function boundaryLength(node) {
+        return node && node.nodeType === 3 ? String(node.data || '').length : (node.childNodes ? node.childNodes.length : 0);
+    }
+
     idl.defineInterface('Range', {
         constants: { START_TO_START: 0, START_TO_END: 1, END_TO_END: 2, END_TO_START: 3 },
         attributes: {
@@ -208,8 +213,14 @@
             }
         },
         methods: {
-            setStart(node, offset = 0) { Object.assign(internal(this), { startContainer: node, startOffset: Number(offset) || 0 }); },
-            setEnd(node, offset = 0) { Object.assign(internal(this), { endContainer: node, endOffset: Number(offset) || 0 }); },
+            setStart(node, offset = 0) {
+                const bound = boundaryOf(node, offset);
+                Object.assign(internal(this), { startContainer: bound.node, startOffset: bound.offset });
+            },
+            setEnd(node, offset = 0) {
+                const bound = boundaryOf(node, offset);
+                Object.assign(internal(this), { endContainer: bound.node, endOffset: bound.offset });
+            },
             setStartBefore(node) {
                 Object.assign(internal(this), { startContainer: node.parentNode, startOffset: indexOf(node) });
             },
@@ -240,7 +251,7 @@
                 });
             },
             selectNodeContents(node) {
-                const length = node.childNodes ? node.childNodes.length : 0;
+                const length = boundaryLength(node);
                 Object.assign(internal(this), {
                     startContainer: node, startOffset: 0, endContainer: node, endOffset: length
                 });
@@ -248,9 +259,13 @@
             compareBoundaryPoints() { return 0; },
             deleteContents() {
                 const state = internal(this);
-                if (state.startContainer === state.endContainer && state.startContainer && state.startContainer.nodeType === 3) {
-                    state.startContainer.data = state.startContainer.data.slice(0, state.startOffset);
-                    state.endOffset = state.startOffset;
+                const { startContainer, startOffset, endContainer, endOffset } = state;
+                if (!startContainer) return;
+                // 同一文本节点：按偏移截取两端，仅保留 [0, start) 与 [end, ...) 的字符
+                if (startContainer === endContainer && startContainer.nodeType === 3) {
+                    const text = String(startContainer.data);
+                    startContainer.data = text.slice(0, startOffset) + text.slice(endOffset);
+                    state.endOffset = startOffset;
                 }
             },
             extractContents() { return contentsOf(this, true); },
@@ -398,7 +413,13 @@
             },
             selectAllChildren(node) {
                 this.collapse(node, 0);
-                this.extend(node, node.childNodes ? node.childNodes.length : 0);
+                this.extend(node, boundaryLength(node));
+                // 选择节点的全部子节点：创建一个覆盖全部子节点的 Range 并登记
+                const created = create('Range', {
+                    startContainer: node, startOffset: 0,
+                    endContainer: node, endOffset: boundaryLength(node)
+                });
+                this.addRange(created);
             },
             deleteFromDocument() {
                 for (const range of internal(this).ranges) range.deleteContents();

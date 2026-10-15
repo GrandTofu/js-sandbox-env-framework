@@ -58,7 +58,9 @@
     // ==================== 子对象（接口定义见 navigatorApis.js） ====================
     const apis = apiBuilder.build(profile);
     for (const key of ['connection', 'geolocation', 'permissions', 'mediaDevices', 'serviceWorker',
-        'clipboard', 'credentials', 'storage', 'locks', 'wakeLock', 'mediaSession']) {
+        'clipboard', 'credentials', 'storage', 'locks', 'wakeLock', 'mediaSession', 'gpu',
+        'userActivation', 'mediaCapabilities', 'keyboard', 'mouse', 'bluetooth', 'usb', 'serial',
+        'hid', 'xr', 'presentation', 'gamepad', 'midi']) {
         state[key] = apis[key];
     }
 
@@ -121,7 +123,9 @@
         'cookieEnabled', 'appCodeName', 'appName', 'appVersion', 'platform', 'product',
         'userAgent', 'language', 'languages', 'onLine', 'webdriver', 'clipboard', 'credentials',
         'mediaDevices', 'storage', 'serviceWorker', 'locks', 'wakeLock', 'mediaSession',
-        'deviceMemory', 'permissions', 'userAgentData'
+        'deviceMemory', 'permissions', 'userAgentData', 'gpu', 'userActivation',
+        'mediaCapabilities', 'keyboard', 'mouse', 'bluetooth', 'usb', 'serial', 'hid', 'xr',
+        'presentation', 'gamepad', 'midi'
     ];
     if (hasBuildID) attributeKeys.push('buildID');
     for (const key of attributeKeys) {
