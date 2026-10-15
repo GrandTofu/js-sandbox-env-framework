@@ -21,20 +21,47 @@
         return list.find(item => idl.internal(item)[field] === key) || null;
     }
 
-    // 索引属性可枚举；命名属性不可枚举，且不遮蔽原型上的成员（LegacyUnenumerableNamedProperties）
-    function defineSupportedProperties(target, list, field) {
-        list.forEach((item, index) => {
-            Object.defineProperty(target, index, {
-                value: item, writable: false, enumerable: true, configurable: true
-            });
-        });
+    // WebIDL [LegacyUnenumerableNamedProperties]：
+    // - 数组类型（PluginArray / MimeTypeArray）：索引为「自有可枚举」属性（Object.keys 返回索引，与 Chrome 一致），
+    //   命名属性放在外层原型上且不可枚举（for..in / getOwnPropertyNames 都看不到）。
+    // - 实例类型（Plugin / MimeType）：索引与命名都放在外层原型上，实例自身保持 0 个自有属性
+    //   （与 Chrome 一致：Object.getOwnPropertyNames(plugin) === []）。
+    function namedPrototype(list, field) {
+        const namedProto = {};
         for (const item of list) {
             const name = idl.internal(item)[field];
-            if (!name || name in target) continue;
-            Object.defineProperty(target, name, {
-                value: item, writable: false, enumerable: false, configurable: true
+            if (!name || name in namedProto) continue;
+            Object.defineProperty(namedProto, name, {
+                get() { return namedItemOf(list, field, name); }, enumerable: false, configurable: true
             });
         }
+        return namedProto;
+    }
+
+    // 数组：索引挂为自有可枚举属性
+    function defineArrayProperties(target, list, field) {
+        list.forEach((item, index) => {
+            Object.defineProperty(target, index, {
+                get() { return itemOf(list, index); }, enumerable: true, configurable: true
+            });
+        });
+        const namedProto = namedPrototype(list, field);
+        Object.setPrototypeOf(namedProto, Object.getPrototypeOf(target));
+        Object.setPrototypeOf(target, namedProto);
+    }
+
+    // 实例：索引与命名都挂在外层原型上（实例无自有属性）
+    function defineInstanceProperties(target, list, field) {
+        const indexProto = {};
+        list.forEach((item, index) => {
+            Object.defineProperty(indexProto, index, {
+                get() { return itemOf(list, index); }, enumerable: true, configurable: true
+            });
+        });
+        const namedProto = namedPrototype(list, field);
+        Object.setPrototypeOf(namedProto, Object.getPrototypeOf(target));
+        Object.setPrototypeOf(indexProto, namedProto);
+        Object.setPrototypeOf(target, indexProto);
     }
 
     // 有索引 getter 的接口按 WebIDL 获得 %Array.prototype.values% 作为迭代器
@@ -121,16 +148,16 @@
             const plugin = idl.create('Plugin', state);
             const ownDefs = Array.isArray(def.mimeTypes) ? def.mimeTypes : (mimeTypeDefs || []);
             state.mimeTypes = ownDefs.map(mimeDef => mimeTypeFor(mimeDef, plugin));
-            defineSupportedProperties(plugin, state.mimeTypes, 'type');
+            defineInstanceProperties(plugin, state.mimeTypes, 'type');
             plugins.push(plugin);
         }
         for (const def of mimeTypeDefs || []) mimeTypeFor(def, null);
 
         const mimeTypes = Array.from(sharedTypes.values());
         const pluginArray = idl.create('PluginArray', { list: plugins });
-        defineSupportedProperties(pluginArray, plugins, 'name');
+        defineArrayProperties(pluginArray, plugins, 'name');
         const mimeTypeArray = idl.create('MimeTypeArray', { list: mimeTypes });
-        defineSupportedProperties(mimeTypeArray, mimeTypes, 'type');
+        defineArrayProperties(mimeTypeArray, mimeTypes, 'type');
         return { plugins: pluginArray, mimeTypes: mimeTypeArray };
     }
 

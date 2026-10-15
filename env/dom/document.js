@@ -42,6 +42,8 @@
             get: function(target, prop) {
                 if (typeof prop === 'symbol') return target[prop];
                 if (prop in target) return target[prop];
+                // 数值索引：style[0] 返回第 n 个属性名（与 Chrome 一致）
+                if (/^\d+$/.test(prop)) return target.item(Number(prop));
                 const cssProp = prop.replace(/([A-Z])/g, '-$1').toLowerCase();
                 return target._styles[cssProp] || '';
             },
@@ -129,8 +131,15 @@
         },
         item: function(index) {
             return Object.keys(this._styles).filter(k => !k.startsWith('_'))[index] || '';
+        },
+        _names: function() {
+            return Object.keys(this._styles).filter(k => !k.startsWith('_'));
         }
     };
+    // 索引访问器：style[0] 返回第 0 个属性名（与 Chrome 的 CSSStyleDeclaration 索引行为一致）
+    Object.defineProperty(CSSStyleDeclaration.prototype, '0', {
+        get() { return this.item(0); }, configurable: true
+    });
     
     // ==================== DOMTokenList (classList) ====================
     function DOMTokenList(element, attrName) {
@@ -2507,6 +2516,15 @@
         while (this.firstChild) this.removeChild(this.firstChild);
         this.append(...nodes);
     };
+    // DocumentFragment 与 Element 一样聚合子节点文本（Node 默认实现返回 null）
+    Object.defineProperty(DocumentFragment.prototype, 'textContent', {
+        get() { return this.childNodes.map(node => node.nodeType === 8 ? '' : node.textContent).join(''); },
+        set(value) {
+            while (this.firstChild) this.removeChild(this.firstChild);
+            if (value != null && String(value)) this.appendChild(this.ownerDocument?.createTextNode(String(value)) || new Text(String(value)));
+        },
+        configurable: true, enumerable: true
+    });
     window.DocumentFragment = DocumentFragment;
     
     // DOMException 由 env/webapi/domexception.js 提供（基础模块，始终先于本文件加载）
